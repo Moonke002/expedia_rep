@@ -1,74 +1,56 @@
 # Expedia Rep
 
-Expedia Rep is a small Expedia replication exercise. Part 1 presents an Expedia-inspired “Choose stay” experience where a user searches hotel names and reviews available fixed-date stays from supplied CSV data.
+Expedia Rep is a classroom travel prototype. Part 2 improves the hotel search screen and adds simulated booking history. All booking actions are available in the Vue interface. No payment or real reservation occurs.
 
-## Repository layout
+## Run locally
 
-```text
-backend/
-  app/
-    main.py          # FastAPI application, CSV join, and search endpoint
-  hotels.csv         # supplied hotel records (add locally)
-  trips.csv          # supplied stay records (add locally)
-  requirements.txt   # Python dependencies
-frontend/
-  src/               # Vue search, filters, and stay-card results
-  package.json       # Node dependencies and scripts
-  vite.config.js     # Vite configuration
-docs/design.md       # Part 1 design responsibilities
-prompts/             # selected prompts
-handoffs/current.md  # current handoff state
-```
-
-## Setup
-
-Backend dependencies are installed in the project-local `backend/.venv`.
-Frontend dependencies are installed in the project-local `frontend/node_modules`.
-
-Place the supplied `hotels.csv` and `trips.csv` files directly in `backend/`. Both files must contain `hotel_id`; the hotel file must also contain a hotel-name column named `hotel_name`, `name`, or `hotel`. The supplied files are included in this checkout.
-
-### Backend
-
-From `backend/`, create and activate a virtual environment, then install the declared dependencies:
+Use Python 3.10+ and a Node.js version supported by `frontend/package.json`.
 
 ```powershell
+cd backend
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-The API will be available at <http://127.0.0.1:8000>. The search endpoint is `GET /api/hotels/search?hotel_name=...`; `/health` and `/docs` are also available.
-
-### Frontend
-
-From `frontend/`, install dependencies and start the Vite development server:
+In another terminal:
 
 ```powershell
+cd frontend
 npm install
 npm run dev
 ```
 
-The frontend will print its local development URL in the terminal.
+Open the URL printed by Vite (normally <http://127.0.0.1:5173/>). Vite proxies `/api` to FastAPI at `http://127.0.0.1:8000`. The API also exposes `/health` and `/docs`.
 
-The Vite development server proxies `/api` requests to the backend at `http://127.0.0.1:8000`.
+## Data and behavior
 
-## Part 1 behavior
+- `backend/hotels.csv` and `backend/trips.csv` are joined through `hotel_id`. Hotel-name search is case-insensitive; a blank search lists all stays. City and nightly-price filters and price sorting operate on returned stays.
+- `backend/users.csv` defines demo travelers. `backend/bookings.csv` supplies initial booking history.
+- The backend creates `backend/bookings.sqlite3` on the first history request, seeds the sample bookings once, and stores new bookings and status changes there. This local file is ignored by Git. Deleting a test booking removes only a booking created in the UI; supplied sample records are protected.
+- Select a demo traveler, search for a stay, and choose **Book this stay**. The app opens **Booking history**, where the new record can be read, cancelled while retained, and deleted after an in-page confirmation.
+- The two-month calendar is for planning only. It does not filter the fixed-date offers. Stay totals multiply the supplied nightly rate by the number of nights; taxes and fees are unavailable.
 
-Enter a hotel name present in `backend/hotels.csv`. Matching stays joined by `hotel_id` appear as Expedia-inspired cards with the hotel name, location, trip name, dates, nightly rate, and calculated stay total. City and nightly-price filters operate on the returned data.
+## Checks
 
-The screen includes the visual regions represented by the supplied references: a “Choose stay” header, date/traveler summary, search control, filter row, repeated result template, and price module.
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pytest -q
+cd ..\frontend
+.\node_modules\.bin\oxlint.cmd .
+.\node_modules\.bin\eslint.cmd .
+npm run build
+```
 
-The supplied CSVs do not contain real property photos, ratings, amenities, flights, previous prices, savings, traveler accounts, saved trips, or booking records. The UI uses labeled CSS placeholders for photos and explicitly identifies savings as unavailable rather than inventing those values.
+Browser checks: `Trail` returns Valley Trail Inn; `Inn` returns Maple Square Inn, Liberty Lane Inn, and Valley Trail Inn; an absent name shows a clear no-results message. A test booking can be created, seen after reload, cancelled while retained, then deleted from history.
 
-Expected no-result search: enter a name absent from the supplied data; the page shows `No matching hotel stays were found.`
+## Project notes
 
-Observed status: direct Oxlint/ESLint checks and the production build pass. In the browser, `Harbor Lantern Hotel` returned two stay cards (`T001` and `T009`), the Boston city filter remained functional, and `No Such Hotel` displayed `No matching hotel stays were found.`
+- [Project rules](AGENTS.md)
+- [Design and UI research note](docs/design.md)
+- [Search screenshot](docs/screenshots/part-2-search.png) and [booking-history screenshot](docs/screenshots/part-2-history.png)
+- [Selected prompts](prompts/)
+- [Current handoff](handoffs/current.md)
+- [Part report](report.md)
 
-The requested manual VS Code scan could not be completed because no controllable VS Code window is available in this environment. Commit and GitHub push remain pending that review.
-
-## Development notes
-
-- Keep backend and frontend dependencies isolated in their respective directories.
-- Add environment-specific configuration through ignored `.env` files and document required variables here.
-- Update this README when setup or project boundaries change.
+The supplied data has no hotel photos, ratings, amenities, room inventory, flights, taxes, or savings. The interface uses illustrations and labels the booking flow as a simulation.

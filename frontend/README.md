@@ -1,6 +1,6 @@
 # Expedia Rep frontend
 
-This Vue 3 and Vite frontend provides the Part 1 Expedia-inspired “Choose stay” screen, supported filters, and repeated stay-card results.
+This Vue 3 and Vite frontend provides hotel search, an interactive planning calendar, stay cards, and simulated booking history with create, cancel, and delete controls.
 
 ## Setup
 
@@ -17,8 +17,9 @@ npm run dev
 ## Checks
 
 ```sh
-npm run lint
+.\node_modules\.bin\oxlint.cmd .
+.\node_modules\.bin\eslint.cmd .
 npm run build
 ```
 
-The screen intentionally uses a CSS photo placeholder and labels savings as unavailable because the supplied CSVs do not contain photos, ratings, flight inventory, previous prices, or booking data.
+The screen uses illustrated placeholders because the CSVs contain no photos. The planning calendar does not filter fixed-date offers; booking actions call the local FastAPI backend and do not charge or reserve inventory.

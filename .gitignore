@@ -2,6 +2,8 @@
 backend/.venv/
 __pycache__/
 *.py[cod]
+backend/*.sqlite3
+backend/*.sqlite3-*
 
 # Frontend dependencies and build output
 frontend/node_modules/
