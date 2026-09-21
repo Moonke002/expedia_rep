@@ -22,8 +22,9 @@ h1, h2, h3, p { margin-top: 0; }
 .main-nav { display: flex; gap: .25rem; align-self: stretch; }
 .main-nav button { border: 0; border-bottom: 3px solid transparent; padding: 0 1rem; background: transparent; color: #d3e3f4; font-size: .89rem; font-weight: 700; }
 .main-nav button:hover, .main-nav button.active { border-bottom-color: #ffd53b; color: white; }
-.traveler-picker { display: flex; align-items: center; gap: .65rem; margin-left: auto; color: #d7e8fb; font-size: .73rem; font-weight: 750; }
-.traveler-picker select { max-width: 150px; border: 1px solid #668ab6; border-radius: 9px; padding: .5rem .65rem; background: #204875; color: white; }
+.account-nav { display: flex; align-items: center; gap: .7rem; margin-left: auto; color: #d7e8fb; font-size: .8rem; font-weight: 750; }
+.account-nav button { border: 1px solid #668ab6; border-radius: 9px; padding: .5rem .75rem; background: #204875; color: white; font-weight: 800; }
+.account-nav button:hover { background: #2c5c91; }
 
 .hero { overflow: hidden; background: linear-gradient(115deg, #0d2d59, #176198); color: white; }
 .hero-inner { display: flex; align-items: center; justify-content: space-between; gap: 3rem; width: min(1180px, calc(100% - 2rem)); min-height: 285px; margin: auto; padding: 2rem 1.25rem 4rem; }
@@ -51,6 +52,7 @@ h1, h2, h3, p { margin-top: 0; }
 .primary-button:hover:not(:disabled) { background: #f5c82b; }
 .search-button { min-height: 48px; padding: .7rem 1.7rem; }
 .field-note { margin: .75rem 0 0; color: #64718a; font-size: .76rem; }
+.search-frequency { margin: .75rem 0 0; color: #1b5f91; font-size: .78rem; font-weight: 800; }
 
 .calendar { position: absolute; z-index: 5; right: 1.6rem; top: calc(100% - 3px); width: min(620px, calc(100vw - 2rem)); border: 1px solid #d5e0ec; border-radius: 14px; padding: 1rem 1.15rem; background: white; box-shadow: 0 24px 55px #102a4b33; }
 .calendar-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: .8rem; }
@@ -68,6 +70,14 @@ h1, h2, h3, p { margin-top: 0; }
 .notice { border-radius: 10px; padding: .85rem 1rem; margin: 1.1rem 0 0; font-size: .88rem; font-weight: 650; }
 .notice.success { border: 1px solid #a8d6b8; background: #eaf6ee; color: #11613c; }
 .notice.error, .empty-state.error { border-color: #ecbfc3; background: #fff1f2; color: #a42a3d; }
+.account-card { width: min(520px, 100%); margin: 1.5rem auto 0; border: 1px solid #dce4ef; border-radius: 18px; padding: 1.6rem; background: white; box-shadow: 0 14px 40px #172b5020; }
+.account-card h2 { margin-bottom: .5rem; font-size: 1.8rem; }
+.account-card > p:not(.eyebrow) { color: #5d6c80; font-size: .88rem; line-height: 1.5; }
+.account-form { display: grid; gap: .9rem; margin: 1.2rem 0 .6rem; }
+.account-form label { display: grid; gap: .35rem; color: #42556f; font-size: .8rem; font-weight: 800; }
+.account-form input { width: 100%; min-height: 44px; border: 1px solid #aebed1; border-radius: 9px; padding: .55rem .7rem; color: #17233e; }
+.account-form .notice { margin: 0; }
+.account-card .demo-hint { margin: 1rem 0 0; border-top: 1px solid #e5ecf4; padding-top: .8rem; font-size: .77rem; }
 .section-head { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin: 2.2rem 0 1.1rem; }
 .result-count { color: #5b6b80; font-size: .82rem; font-weight: 800; white-space: nowrap; }
 .filters { display: flex; align-items: end; flex-wrap: wrap; gap: .65rem; margin-bottom: 1.05rem; }
@@ -95,6 +105,7 @@ h1, h2, h3, p { margin-top: 0; }
 .stay-price { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; border-left: 1px solid #e5ecf4; padding: 1.1rem; text-align: right; }
 .stay-price > span, .stay-price small { color: #65778b; font-size: .71rem; }
 .stay-price strong { margin: .12rem 0 0; font-size: 1.95rem; letter-spacing: -.055em; }
+.stay-price .surge-note { margin-top: .35rem; border-radius: 7px; padding: .35rem .5rem; background: #fff1ce; color: #78510b; font-size: .7rem; font-weight: 800; }
 .stay-price p { margin: .65rem 0 .8rem; color: #254b72; font-size: .82rem; font-weight: 900; }
 .stay-price button { width: 100%; font-size: .78rem; }
 .price-disclaimer { margin: 1rem 0; color: #66788c; font-size: .75rem; }
@@ -133,7 +144,7 @@ h1, h2, h3, p { margin-top: 0; }
 @media (max-width: 600px) {
   .site-header-inner, .hero-inner, .content-wrap { width: min(100% - 1.1rem, 520px); }
   .brand { font-size: 1.1rem; }
-  .traveler-picker span { display: none; }
+  .account-nav { margin-left: auto; }
   .hero-inner { min-height: 220px; padding: 1.5rem .4rem 3.8rem; }
   .hero-art { display: none; }
   .hero h1 { font-size: 2.5rem; }

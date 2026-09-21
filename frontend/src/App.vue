@@ -1,14 +1,21 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 const view = ref('stays')
 const hotelName = ref('')
 const submittedQuery = ref('')
 const results = ref([])
+const searchCount = ref(0)
+const resultsUserId = ref(null)
 const searchState = ref('loading')
 const searchError = ref('')
-const users = ref([])
-const selectedUserId = ref('')
+const authUser = ref(null)
+const authMode = ref('login')
+const authUsername = ref('')
+const authPassword = ref('')
+const authDisplayName = ref('')
+const authError = ref('')
+const authBusy = ref(false)
 const bookings = ref([])
 const bookingState = ref('loading')
 const bookingError = ref('')
@@ -25,7 +32,7 @@ const planningEnd = ref('')
 const weekdays = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
 
 async function api(path, options = {}) {
-  const response = await fetch(path, options)
+  const response = await fetch(path, { credentials: 'same-origin', ...options })
   if (response.status === 204) return null
   const payload = await response.json()
   if (!response.ok) throw new Error(payload.detail ?? 'The request could not be completed.')
@@ -40,9 +47,12 @@ async function searchHotels() {
   selectedPrice.value = 'all'
   sortBy.value = 'recommended'
   submittedQuery.value = hotelName.value.trim()
+  const searchingUserId = authUser.value?.user_id ?? null
   try {
     const payload = await api(`/api/hotels/search?hotel_name=${encodeURIComponent(submittedQuery.value)}`)
     results.value = payload.results
+    searchCount.value = payload.matching_searches_today
+    resultsUserId.value = searchingUserId
     searchState.value = 'ready'
     view.value = 'stays'
   } catch (error) {
@@ -51,23 +61,21 @@ async function searchHotels() {
   }
 }
 
-async function loadUsers() {
+async function loadSession() {
   try {
-    const payload = await api('/api/users')
-    users.value = payload.users
-    selectedUserId.value = payload.users[0]?.user_id ?? ''
+    const payload = await api('/api/auth/me')
+    authUser.value = payload.user
   } catch (error) {
-    bookingError.value = error.message
-    bookingState.value = 'error'
+    authError.value = error.message
   }
 }
 
 async function loadBookings() {
-  if (!selectedUserId.value) return
+  if (!authUser.value) return
   bookingState.value = 'loading'
   bookingError.value = ''
   try {
-    const payload = await api(`/api/bookings?user_id=${encodeURIComponent(selectedUserId.value)}`)
+    const payload = await api('/api/bookings')
     bookings.value = payload.bookings
     bookingState.value = 'ready'
   } catch (error) {
@@ -76,25 +84,65 @@ async function loadBookings() {
   }
 }
 
-watch(selectedUserId, loadBookings)
-onMounted(() => {
-  searchHotels()
-  loadUsers()
+onMounted(async () => {
+  await loadSession()
+  await searchHotels()
 })
+
+async function submitAccount() {
+  authBusy.value = true
+  authError.value = ''
+  try {
+    if (authMode.value === 'register') {
+      await api('/api/auth/register', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: authUsername.value, password: authPassword.value, display_name: authDisplayName.value }),
+      })
+      authPassword.value = ''
+      authMode.value = 'login'
+      notice.value = 'Demo account created. Sign in to personalize searches and see your bookings.'
+    } else {
+      const payload = await api('/api/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: authUsername.value, password: authPassword.value }),
+      })
+      authUser.value = payload.user
+      authPassword.value = ''
+      view.value = 'stays'
+      notice.value = `Signed in as ${payload.user.username}. Submit a hotel search to see your personalized rate.`
+    }
+  } catch (error) {
+    authError.value = error.message
+  } finally {
+    authBusy.value = false
+  }
+}
+
+async function logout() {
+  try {
+    await api('/api/auth/logout', { method: 'POST' })
+    authUser.value = null
+    bookings.value = []
+    await searchHotels()
+    notice.value = 'Signed out. Searches now show base rates.'
+  } catch (error) {
+    authError.value = error.message
+  }
+}
 
 const cityOptions = computed(() => [...new Set(results.value.map((item) => item.hotel.city))].sort())
 const priceOptions = computed(() =>
-  [...new Set(results.value.map((item) => Number(item.hotel.nightly_rate_usd)))].sort((a, b) => a - b),
+  [...new Set(results.value.map((item) => Number(item.pricing.displayed_nightly_rate_usd)))].sort((a, b) => a - b),
 )
 const filteredResults = computed(() => {
   const matches = results.value.filter((item) => {
     const cityMatches = selectedCity.value === 'all' || item.hotel.city === selectedCity.value
-    const rate = Number(item.hotel.nightly_rate_usd)
+    const rate = Number(item.pricing.displayed_nightly_rate_usd)
     const priceMatches = selectedPrice.value === 'all' || rate <= Number(selectedPrice.value)
     return cityMatches && priceMatches
   })
-  if (sortBy.value === 'price-low') matches.sort((a, b) => Number(a.hotel.nightly_rate_usd) - Number(b.hotel.nightly_rate_usd))
-  if (sortBy.value === 'price-high') matches.sort((a, b) => Number(b.hotel.nightly_rate_usd) - Number(a.hotel.nightly_rate_usd))
+  if (sortBy.value === 'price-low') matches.sort((a, b) => Number(a.pricing.displayed_nightly_rate_usd) - Number(b.pricing.displayed_nightly_rate_usd))
+  if (sortBy.value === 'price-high') matches.sort((a, b) => Number(b.pricing.displayed_nightly_rate_usd) - Number(a.pricing.displayed_nightly_rate_usd))
   return matches
 })
 
@@ -114,12 +162,12 @@ function money(value) {
   if (value === null || value === undefined || value === '') return '—'
   const amount = Number(value)
   return Number.isFinite(amount)
-    ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(amount)
+    ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(amount)
     : '—'
 }
 
 function stayTotal(item) {
-  const rate = Number(item.hotel?.nightly_rate_usd)
+  const rate = Number(item.pricing?.displayed_nightly_rate_usd)
   const nights = stayNights(item.stay)
   return Number.isFinite(rate) && nights ? money(rate * nights) : '—'
 }
@@ -130,8 +178,10 @@ function dateLabel(value) {
 }
 
 async function createBooking(item) {
-  if (!selectedUserId.value) {
-    bookingError.value = 'Choose a demo traveler before booking.'
+  if (!authUser.value) {
+    view.value = 'account'
+    authMode.value = 'login'
+    authError.value = 'Sign in before creating a demo booking.'
     return
   }
   busyBookingId.value = item.stay.trip_id
@@ -140,7 +190,7 @@ async function createBooking(item) {
     const booking = await api('/api/bookings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: selectedUserId.value, trip_id: item.stay.trip_id }),
+      body: JSON.stringify({ trip_id: item.stay.trip_id }),
     })
     await loadBookings()
     view.value = 'bookings'
@@ -186,6 +236,12 @@ async function deleteBooking(booking) {
 }
 
 function showView(nextView) {
+  if (nextView === 'bookings' && !authUser.value) {
+    view.value = 'account'
+    authMode.value = 'login'
+    authError.value = 'Sign in to view your booking history.'
+    return
+  }
   view.value = nextView
   notice.value = ''
   if (nextView === 'bookings') loadBookings()
@@ -235,12 +291,10 @@ function choosePlanningDate(value) {
           <button type="button" :class="{ active: view === 'stays' }" @click="showView('stays')">Explore stays</button>
           <button type="button" :class="{ active: view === 'bookings' }" @click="showView('bookings')">Booking history</button>
         </nav>
-        <label class="traveler-picker">
-          <span>Demo traveler</span>
-          <select v-model="selectedUserId" aria-label="Demo traveler">
-            <option v-for="user in users" :key="user.user_id" :value="user.user_id">{{ user.display_name }}</option>
-          </select>
-        </label>
+        <div class="account-nav">
+          <template v-if="authUser"><span>Hi, {{ authUser.username }}</span><button type="button" @click="logout">Log out</button></template>
+          <button v-else type="button" @click="view = 'account'; authMode = 'login'; authError = ''">Sign in / Create account</button>
+        </div>
       </div>
     </header>
 
@@ -269,7 +323,7 @@ function choosePlanningDate(value) {
       </section>
 
       <div class="content-wrap">
-        <section class="search-card" aria-labelledby="search-title">
+        <section v-if="view !== 'account'" class="search-card" aria-labelledby="search-title">
           <div class="search-card-heading">
             <div>
               <p class="eyebrow">Find a hotel</p>
@@ -293,6 +347,7 @@ function choosePlanningDate(value) {
             </button>
           </form>
           <p class="field-note">Planning dates help you compare options; each offer keeps the fixed dates shown below.</p>
+          <p v-if="authUser && resultsUserId === authUser.user_id && submittedQuery && searchState === 'ready'" class="search-frequency" role="status">Your matching searches today (UTC): {{ searchCount }}. A 20% demo surge starts at 4.</p>
           <div v-if="calendarOpen" class="calendar" role="dialog" aria-label="Choose planning dates">
             <div class="calendar-toolbar">
               <strong>Select planning dates</strong>
@@ -321,7 +376,22 @@ function choosePlanningDate(value) {
         <p v-if="notice" class="notice success" role="status">{{ notice }}</p>
         <p v-if="bookingError" class="notice error" role="alert">{{ bookingError }}</p>
 
-        <template v-if="view === 'stays'">
+        <section v-if="view === 'account'" class="account-card" aria-labelledby="account-title">
+          <p class="eyebrow">Your demo account</p>
+          <h2 id="account-title">{{ authMode === 'login' ? 'Sign in' : 'Create an account' }}</h2>
+          <p>Use made-up demo credentials only. No real reservation or payment is made.</p>
+          <form class="account-form" @submit.prevent="submitAccount">
+            <label>Username<input v-model.trim="authUsername" autocomplete="username" required minlength="3" maxlength="30" /></label>
+            <label v-if="authMode === 'register'">Display name (optional)<input v-model.trim="authDisplayName" autocomplete="nickname" maxlength="80" /></label>
+            <label>Password<input v-model="authPassword" type="password" :autocomplete="authMode === 'login' ? 'current-password' : 'new-password'" required minlength="8" /></label>
+            <p v-if="authError" class="notice error" role="alert">{{ authError }}</p>
+            <button class="primary-button" type="submit" :disabled="authBusy">{{ authBusy ? 'Please wait…' : authMode === 'login' ? 'Sign in' : 'Create account' }}</button>
+          </form>
+          <button class="text-button" type="button" @click="authMode = authMode === 'login' ? 'register' : 'login'; authError = ''; notice = ''">{{ authMode === 'login' ? 'New here? Create a demo account' : 'Already have an account? Sign in' }}</button>
+          <p class="demo-hint">Seeded demo: username <code>demo1</code>, password <code>DemoPass123!</code>.</p>
+        </section>
+
+        <template v-else-if="view === 'stays'">
           <section class="section-head" aria-labelledby="results-title">
             <div><p class="eyebrow">Hotels and stays</p><h2 id="results-title">{{ submittedQuery ? `Results for “${submittedQuery}”` : 'Explore available stays' }}</h2></div>
             <span v-if="searchState === 'ready'" class="result-count">{{ filteredResults.length }} stay{{ filteredResults.length === 1 ? '' : 's' }}</span>
@@ -351,19 +421,20 @@ function choosePlanningDate(value) {
                   <p class="stay-dates">{{ dateLabel(item.stay.check_in) }} – {{ dateLabel(item.stay.check_out) }} <span v-if="stayNights(item.stay)">· {{ stayNights(item.stay) }} nights</span></p>
                 </div>
                 <div class="stay-price">
-                  <span>From</span><strong>{{ money(item.hotel.nightly_rate_usd) }}</strong><small>per night</small>
+                  <span>Displayed nightly rate</span><strong>{{ money(item.pricing.displayed_nightly_rate_usd) }}</strong><small>per night</small>
+                  <span v-if="item.pricing.surge_applied" class="surge-note">20% demo surge · base {{ money(item.pricing.base_nightly_rate_usd) }}</span>
                   <p>{{ stayTotal(item) }} stay total*</p>
                   <button class="primary-button" type="button" :disabled="busyBookingId === item.stay.trip_id" @click="createBooking(item)">{{ busyBookingId === item.stay.trip_id ? 'Booking…' : 'Book this stay' }}</button>
                 </div>
               </article>
             </div>
-            <p v-if="filteredResults.length" class="price-disclaimer">* Simulated total is nightly rate × nights. Taxes and fees are not in the supplied data. Booking does not reserve inventory or charge a card.</p>
+            <p v-if="filteredResults.length" class="price-disclaimer">* Simulated total is displayed nightly rate × nights. For signed-in users, the fourth matching hotel-name search in a UTC day raises the displayed rate by 20% once. This classroom urgency assumption is not evidence of actual urgency. Base rates stay unchanged; taxes, fees, inventory, and payment are not included.</p>
           </template>
         </template>
 
         <section v-else class="history-section" aria-labelledby="history-title">
           <div class="section-head"><div><p class="eyebrow">Your demo trips</p><h2 id="history-title">Booking history</h2></div><span v-if="bookingState === 'ready'" class="result-count">{{ bookings.length }} booking{{ bookings.length === 1 ? '' : 's' }}</span></div>
-          <p class="history-intro">Bookings are stored locally for this demo traveler. Cancelling keeps a record in history.</p>
+          <p class="history-intro">Bookings for {{ authUser?.username }} are stored locally. Cancelling keeps a record in history.</p>
           <p v-if="bookingState === 'loading'" class="empty-state" role="status">Loading booking history…</p>
           <p v-else-if="bookingState === 'error'" class="empty-state error" role="alert">{{ bookingError }}</p>
           <p v-else-if="!bookings.length" class="empty-state" role="status">No bookings yet for this traveler. Explore stays to create one.</p>
