@@ -17,4 +17,4 @@
 ## Limitations and next task
 
 - No real payments, reservation inventory, tax/fee pricing, photos, ratings, amenities, or flights are provided by the source data. The local MOV reference could not be played through the browser's local-file policy; the companion PDF describes its key interactions.
-- Next: review the Part 2 diff in an editor and submit the Part 2 report with the exact implementation commit.
+- The Part 2 report is at `report.md` and names implementation commit `bc1b303ead15f46f70b8be0abbe544872aa89c8f`. Next: review the screen and diff with the instructor and decide whether more data or services are needed.

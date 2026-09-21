@@ -1,31 +1,31 @@
-# Expedia Rep — Part 1
+# Expedia Rep — Part 2
 
 ## Repository and commit
 
-[GitHub repository](https://github.com/Moonke002/expedia_rep). The submitted Part 1 commit is [`52fdaaa0274f46a766d1b6faf09df1bb8c4629fd`](https://github.com/Moonke002/expedia_rep/commit/52fdaaa0274f46a766d1b6faf09df1bb8c4629fd), titled `Part 1: add Expedia stay search experience`.
+[GitHub repository](https://github.com/Moonke002/expedia_rep). The exact Part 2 implementation commit is [`bc1b303ead15f46f70b8be0abbe544872aa89c8f`](https://github.com/Moonke002/expedia_rep/commit/bc1b303ead15f46f70b8be0abbe544872aa89c8f). The [Part 1 report](https://github.com/Moonke002/expedia_rep/blob/bbdc1eac6403093450f80eaa2347436952d9bdf6/report.md) remains available at its earlier commit.
 
 ## Implementation
 
-The Vue frontend provides an Expedia-inspired “Choose stay” screen with hotel-name search, city and nightly-price filters, repeated stay cards, fixed dates, hotel location, nightly rate, and a calculated stay total. It uses CSS photo placeholders because the supplied data has no property photos.
+Since Part 1, the Vue interface gained a clearer Expedia-inspired hero, grouped hotel search, illustrated stay cards, city and nightly-price filters, sorting, and an interactive two-month planning calendar. The calendar is explicitly a preference tool: trips retain their fixed dates.
 
-FastAPI exposes `/health` and `/api/hotels/search`. The backend reads `backend/hotels.csv` and `backend/trips.csv`, matches the hotel name, and joins hotel records to available stays through `hotel_id`. The frontend calls the endpoint through the Vite development proxy and renders the returned records.
+The frontend now provides every simulated booking action. A user selects a demo traveler, creates a booking from a stay card, reads it in booking history, cancels it by updating its status while retaining the record, and deletes a UI-created test booking after an in-page confirmation. FastAPI validates these requests. The backend joins hotels and trips through `hotel_id`, reads travelers and initial bookings from CSV, and persists booking changes in a local ignored SQLite file. No payment or real inventory reservation occurs.
 
 ## Verification
 
-- Backend smoke check: `/health` returned HTTP 200 with `{"status":"ok"}`; the matching search for `Harbor Lantern Hotel` returned two records, `T001` and `T009`, both joined to `H001`; `No Such Hotel` returned zero records.
-- Frontend smoke check: the Vite root returned HTTP 200, the browser rendered two stay cards for `Harbor Lantern Hotel`, and the city filter operated on the results.
-- No-result browser check: searching for `No Such Hotel` displayed `No matching hotel stays were found.`
-- Quality checks: Oxlint, ESLint, and the production build all passed.
-- Stress check: 300 concurrent matching API requests, 200 concurrent no-result API requests, and 100 concurrent frontend requests completed with zero failures. API matching p95 latency was 321.9 ms; no-result p95 was 38.1 ms; frontend p95 was 31.3 ms.
-- Manual review: a VS Code scan was attempted but could not be completed because no controllable VS Code window was available in the execution environment. The changed files were inspected through the available workspace file view instead.
-- Screenshot status: no instructor-accessible browser screenshot file is currently stored in the repository. The browser checks were performed live at `http://127.0.0.1:5173/`; the supplied PNGs are visual references, not screenshots of this implementation.
+- Manual code and visual review: inspected the changed source and Git diff, checked the refreshed browser screen and two-month calendar, and reviewed the repository screenshots. A VS Code-specific scan was not available in this environment.
+- Search: entered `Inn`. Expected Maple Square Inn, Liberty Lane Inn, and Valley Trail Inn. Observed those three hotels across four fixed-date stays. Entered `Trail`; expected and observed Valley Trail Inn. Entered `No Such Hotel`; expected and observed the no-results message.
+- Calendar: opened the date control, selected September 24–28, 2026, and closed it. Expected a visible two-month calendar and a selected planning range without changing offered stay dates; observed both.
+- Create/read: clicked **Book this stay** for Valley Trail Inn as Demo Traveler 1, then reloaded and opened booking history. Expected a confirmed booking to persist; observed it in history alongside the sample bookings.
+- Update/delete: clicked **Cancel booking** on the new test booking. Expected a cancelled status with the row retained; observed it. Then used **Delete test booking** and **Confirm delete**. Expected only the test row to disappear; observed the two supplied sample bookings remain. Selecting Demo Traveler 2 showed that traveler's separate sample booking.
+- Automated checks: 3 backend tests passed; Oxlint, ESLint, Vite production build, and `git diff --check` passed. The backend test run emitted two dependency deprecation warnings but no failures.
+- Screenshots: [search result](https://github.com/Moonke002/expedia_rep/blob/bc1b303ead15f46f70b8be0abbe544872aa89c8f/docs/screenshots/part-2-search.png) and [cancelled booking history](https://github.com/Moonke002/expedia_rep/blob/bc1b303ead15f46f70b8be0abbe544872aa89c8f/docs/screenshots/part-2-history.png).
 
 ## Project context and next steps
 
-- [README.md](https://github.com/Moonke002/expedia_rep/blob/master/README.md) — setup, behavior, and limitations.
-- [AGENTS.md](https://github.com/Moonke002/expedia_rep/blob/master/AGENTS.md) — project rules.
-- [Design note](https://github.com/Moonke002/expedia_rep/blob/master/docs/design.md) — frontend, FastAPI, and backend responsibilities.
-- [Selected prompt](https://github.com/Moonke002/expedia_rep/blob/master/prompts/part-1.md) — Part 1 scope.
-- [Current handoff](https://github.com/Moonke002/expedia_rep/blob/master/handoffs/current.md) — checked work, limitations, and next task.
+- [README.md](https://github.com/Moonke002/expedia_rep/blob/bc1b303ead15f46f70b8be0abbe544872aa89c8f/README.md) — setup and run instructions.
+- [AGENTS.md](https://github.com/Moonke002/expedia_rep/blob/bc1b303ead15f46f70b8be0abbe544872aa89c8f/AGENTS.md) — project rules.
+- [Design and UI research note](https://github.com/Moonke002/expedia_rep/blob/bc1b303ead15f46f70b8be0abbe544872aa89c8f/docs/design.md) — frontend, FastAPI, and backend responsibilities.
+- [Selected Part 2 prompt](https://github.com/Moonke002/expedia_rep/blob/bc1b303ead15f46f70b8be0abbe544872aa89c8f/prompts/part-2.md) — requested scope.
+- [Current handoff](https://github.com/Moonke002/expedia_rep/blob/master/handoffs/current.md) — checks and limits.
 
-Remaining limitations are the absence of real photos, ratings, amenities, flight inventory, savings, traveler accounts, saved state, and booking records in the supplied CSV data. The next task is to complete the manual VS Code review, add instructor-accessible browser screenshots if required, and then extend the data model only when the next part supplies those fields and behaviors.
+The supplied data has no real room inventory, payments, property photos, ratings, flights, taxes, or fees. The local MOV reference could not be played through the browser's local-file policy; its companion PDF describes the visual outcome and interactions. The next task is to review the Part 2 screen and diff with the instructor, then define any additional data and services needed for a real booking flow.
