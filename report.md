@@ -1,8 +1,8 @@
-# Expedia Rep — Part 3
+# Expedia Rep — Part 2
 
 ## Repository and commit
 
-[GitHub repository](https://github.com/Moonke002/expedia_rep). The reviewed Part 3 work is merged into `main` at [`79cc074a1571149602fcc298f71ba2669c962687`](https://github.com/Moonke002/expedia_rep/commit/79cc074a1571149602fcc298f71ba2669c962687). The Part 1 checkpoint remains preserved at [`52fdaaa`](https://github.com/Moonke002/expedia_rep/commit/52fdaaa).
+[GitHub repository](https://github.com/Moonke002/expedia_rep). The reviewed Part 2 work is merged into `main` at [`79cc074a1571149602fcc298f71ba2669c962687`](https://github.com/Moonke002/expedia_rep/commit/79cc074a1571149602fcc298f71ba2669c962687). The Part 1 checkpoint remains preserved at [`52fdaaa`](https://github.com/Moonke002/expedia_rep/commit/52fdaaa).
 
 ## Implementation
 
