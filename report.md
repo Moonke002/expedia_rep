@@ -2,30 +2,38 @@
 
 ## Repository and commit
 
-[GitHub repository](https://github.com/Moonke002/expedia_rep). The exact Part 2 implementation commit is [`bc1b303ead15f46f70b8be0abbe544872aa89c8f`](https://github.com/Moonke002/expedia_rep/commit/bc1b303ead15f46f70b8be0abbe544872aa89c8f). The [Part 1 report](https://github.com/Moonke002/expedia_rep/blob/bbdc1eac6403093450f80eaa2347436952d9bdf6/report.md) remains available at its earlier commit.
+[GitHub repository](https://github.com/Moonke002/expedia_rep). The reviewed Part 2 work is merged into `main` at [`79cc074a1571149602fcc298f71ba2669c962687`](https://github.com/Moonke002/expedia_rep/commit/79cc074a1571149602fcc298f71ba2669c962687). The Part 1 checkpoint remains preserved at [`52fdaaa`](https://github.com/Moonke002/expedia_rep/commit/52fdaaa). The ZIP lookup and map described below are later project updates than the referenced Part 2 commit.
 
 ## Implementation
 
-Since Part 1, the Vue interface gained a clearer Expedia-inspired hero, grouped hotel search, illustrated stay cards, city and nightly-price filters, sorting, and an interactive two-month planning calendar. The calendar is explicitly a preference tool: trips retain their fixed dates.
+The Vue frontend provides hotel search, filters, simulated booking, booking history, demo sign-in, account creation, and logout. FastAPI exposes authentication, search, pricing, and user-bound booking endpoints. Python controllers seed the supplied CSV records into SQLite once, then use SQLite for application reads and writes. Search history drives the classroom 20% surge display after the fourth matching normalized query in a UTC day without changing stored base rates.
 
-The frontend now provides every simulated booking action. A user selects a demo traveler, creates a booking from a stay card, reads it in booking history, cancels it by updating its status while retaining the record, and deletes a UI-created test booking after an in-page confirmation. FastAPI validates these requests. The backend joins hotels and trips through `hotel_id`, reads travelers and initial bookings from CSV, and persists booking changes in a local ignored SQLite file. No payment or real inventory reservation occurs.
+The ZIP lookup demonstration accepts a five-digit U.S. ZIP code, including leading zeros. FastAPI sends Geoapify geocoding and Places requests using the backend-only key from the ignored project-root `.env`. It searches for nearby hotels only after Geoapify confirms the requested U.S. postcode, and centers the 5 km Places search on the returned coordinates. Vue displays the returned hotels in a list and a Leaflet map; selecting either a list entry or a map marker identifies the same hotel in both. Names, localities, coordinates, and distances come from the backend response, with missing optional locality labeled as unavailable. The ZIP results invent no prices, ratings, room availability, or booking confirmations. The map uses OpenStreetMap tiles without a browser-visible tile key.
+
+**Screen recording:**
+
+<video controls width="720" src="https://raw.githubusercontent.com/Moonke002/expedia_rep/main/docs/assets/zip-lookup-demo.mp4">
+  Your browser does not support embedded video. [Download or watch the ZIP lookup demonstration](https://raw.githubusercontent.com/Moonke002/expedia_rep/main/docs/assets/zip-lookup-demo.mp4).
+</video>
 
 ## Verification
 
-- Manual code and visual review: inspected the changed source and Git diff, checked the refreshed browser screen and two-month calendar, and reviewed the repository screenshots. A VS Code-specific scan was not available in this environment.
-- Search: entered `Inn`. Expected Maple Square Inn, Liberty Lane Inn, and Valley Trail Inn. Observed those three hotels across four fixed-date stays. Entered `Trail`; expected and observed Valley Trail Inn. Entered `No Such Hotel`; expected and observed the no-results message.
-- Calendar: opened the date control, selected September 24–28, 2026, and closed it. Expected a visible two-month calendar and a selected planning range without changing offered stay dates; observed both.
-- Create/read: clicked **Book this stay** for Valley Trail Inn as Demo Traveler 1, then reloaded and opened booking history. Expected a confirmed booking to persist; observed it in history alongside the sample bookings.
-- Update/delete: clicked **Cancel booking** on the new test booking. Expected a cancelled status with the row retained; observed it. Then used **Delete test booking** and **Confirm delete**. Expected only the test row to disappear; observed the two supplied sample bookings remain. Selecting Demo Traveler 2 showed that traveler's separate sample booking.
-- Automated checks: 3 backend tests passed; Oxlint, ESLint, Vite production build, and `git diff --check` passed. The backend test run emitted two dependency deprecation warnings but no failures.
-- Screenshots: [search result](https://github.com/Moonke002/expedia_rep/blob/bc1b303ead15f46f70b8be0abbe544872aa89c8f/docs/screenshots/part-2-search.png) and [cancelled booking history](https://github.com/Moonke002/expedia_rep/blob/bc1b303ead15f46f70b8be0abbe544872aa89c8f/docs/screenshots/part-2-history.png).
+- Backend smoke test: `backend/.venv/Scripts/python.exe -m pytest -q` passed with 6 tests. Two dependency deprecation warnings were reported; no test failed.
+- Frontend checks: Oxlint, ESLint, and `npm run build` passed.
+- ZIP demonstration: the frontend production build passed after adding Leaflet and the explicit invalid, unresolved, failed-request, results, and no-nearby-results states. The visible browser showed the verified ZIP 16802 response with 20 returned hotels and the map centered on its returned point; the maximum listed distance was 4.294 km.
+- List/map selection: selecting Fairfield Inn & Suites in the list highlighted its map marker; selecting Sleep Inn on the map selected the matching list item.
+- Configuration safety: `.env` matches the root `.gitignore` rule and is not tracked. The key value was not read during this check. Geoapify provider requests remain in FastAPI; the browser map uses uncredentialed OpenStreetMap tiles.
+- Runtime checks: `GET /health` returned HTTP 200 with `{"status":"ok"}`; the Vite page returned HTTP 200.
+- Browser matching search: searched `Trail`. Expected one matching stay; observed Valley Trail Inn and one stay at the $100 base rate.
+- Browser no-results search: searched `No Such Hotel`. Expected no matches; observed `0 stays` and `No matching hotel stays were found.`
+- Browser account/history smoke test: signed in as `demo1`, opened Booking history, and observed four records belonging to that account. The seeded cancelled records remained visible.
+- SQLite integrity: observed 8 hotels, 12 trips, 6 users, 8 bookings, and 26 search-history records; the seed marker was present, all supplied booking IDs occurred once, and `PRAGMA foreign_key_check` returned no violations.
 
 ## Project context and next steps
 
-- [README.md](https://github.com/Moonke002/expedia_rep/blob/bc1b303ead15f46f70b8be0abbe544872aa89c8f/README.md) — setup and run instructions.
-- [AGENTS.md](https://github.com/Moonke002/expedia_rep/blob/bc1b303ead15f46f70b8be0abbe544872aa89c8f/AGENTS.md) — project rules.
-- [Design and UI research note](https://github.com/Moonke002/expedia_rep/blob/bc1b303ead15f46f70b8be0abbe544872aa89c8f/docs/design.md) — frontend, FastAPI, and backend responsibilities.
-- [Selected Part 2 prompt](https://github.com/Moonke002/expedia_rep/blob/bc1b303ead15f46f70b8be0abbe544872aa89c8f/prompts/part-2.md) — requested scope.
-- [Current handoff](https://github.com/Moonke002/expedia_rep/blob/master/handoffs/current.md) — checks and limits.
+- [README.md](https://github.com/Moonke002/expedia_rep/blob/79cc074a1571149602fcc298f71ba2669c962687/README.md) — setup, run, and verification instructions.
+- [AGENTS.md](https://github.com/Moonke002/expedia_rep/blob/79cc074a1571149602fcc298f71ba2669c962687/AGENTS.md) — project rules.
+- [Design note](https://github.com/Moonke002/expedia_rep/blob/79cc074a1571149602fcc298f71ba2669c962687/docs/design.md) — frontend, FastAPI, and backend responsibilities.
+- [Selected prompts](https://github.com/Moonke002/expedia_rep/tree/79cc074a1571149602fcc298f71ba2669c962687/prompts/) and [current handoff](https://github.com/Moonke002/expedia_rep/blob/79cc074a1571149602fcc298f71ba2669c962687/handoffs/current.md).
 
-The supplied data has no real room inventory, payments, property photos, ratings, flights, taxes, or fees. The local MOV reference could not be played through the browser's local-file policy; its companion PDF describes the visual outcome and interactions. The next task is to review the Part 2 screen and diff with the instructor, then define any additional data and services needed for a real booking flow.
+Remaining limitations are intentional classroom-demo boundaries: shared demo credentials, local SQLite, simulated bookings, no payments, inventory reservation, account recovery, hotel photography, flights, taxes, or fees. The nearby hotel list reflects Geoapify Places results around one verified postcode point, not every address in the ZIP area. The next task is instructor review of the account/pricing flow and a decision about whether to expand catalog management or harden authentication and pricing for production use.

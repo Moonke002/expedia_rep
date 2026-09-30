@@ -1,2 +1,4 @@
 fastapi[standard]
 pytest
+python-dotenv
+httpx

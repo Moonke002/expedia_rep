@@ -1,15 +1,11 @@
-# Part 2 design and UI research
+# Design and MVC flow
 
-## Research direction
+The Vue View provides hotel search, result cards, filters, account creation/sign-in/logout, displayed nightly and stay prices, and a signed-in traveler's booking history. The planning calendar remains a preference tool; trips retain fixed dates. Booking confirmation appears only after FastAPI returns a saved record.
 
-The supplied UI Research activity starts from a working `Trail` hotel search, compares Expedia, Priceline, and Booking.com, and selects an Expedia-style layout and travel illustration with a two-month calendar interaction. The supplied possible-outcome video is described in the activity PDF; direct playback of the local MOV was blocked by the browser's local-file policy. The design preserves `Trail` and `Inn` search while using a clear hero, grouped search controls, illustrated result cards, and a visible booking-history path.
+FastAPI receives requests, reads the HttpOnly demo session cookie, and maps controller errors to HTTP responses. Typed Python models define hotels, trips, travelers, bookings, account inputs, and price quotes. The database controller seeds SQLite once from four CSVs, preserves existing IDs and booking references, upgrades existing user rows with demo credentials, and persists accounts, sessions, search history, and bookings. `hotel_id` links trips to hotels; `trip_id` and `user_id` link bookings to trips and users; search history also references users.
 
-## Responsibilities
+The search controller records a signed-in search and obtains that user's count for the normalized query during the current **UTC** day. The pricing rule returns the unchanged base rate on searches 1–3 and base × 1.20 from search 4 onward, rounded to cents and never compounded. A guest sees the base rate. Sorting, filtering, and stay totals in Vue use the returned displayed rate; the SQLite hotel base rate is never edited. Repeated searching is only an assumed urgency signal for this class exercise.
 
-- Vue owns search, city/price filters, sorting, the planning calendar, traveler selection, booking controls, feedback, and history display. Dates in the calendar are planning preferences; each offered trip keeps its supplied fixed dates.
-- FastAPI validates search and booking requests and exposes `/api/hotels/search`, `/api/users`, `/api/bookings`, `/api/bookings/{booking_id}`, and `/health`.
-- The backend reads hotels and trips from CSV, joined by `hotel_id`. Users and initial bookings come from the supplied CSVs. SQLite stores changes to simulated bookings so history survives reloads. Cancelling updates status; deleting is limited to UI-created test bookings.
+For example, a signed-in `demo1` search for `Trail` goes from Vue through FastAPI to the search and database controllers. The controllers insert a search-history row, count matching rows for U001 today, join Valley Trail Inn to its offered trip, and attach a price quote. The View displays $100 for searches 1–3 and $120 from search 4 onward. Another user or a different query has an independent count. Booking create/cancel/delete use the signed-in session's `user_id`, not a user ID supplied by the browser; cancellation retains the record and deletion is limited to the account's UI-created test bookings.
 
-## Data limits
-
-No real booking, inventory reservation, payment, photo, rating, tax, fee, or flight service is connected. The stay total is nightly rate × nights. Illustrations replace absent property photos and the UI labels the transaction as a simulation.
+This is a local classroom demo: seeded passwords are documented and shared, no recovery or production account protection exists, and there is no real inventory, payment, flight, rating, tax, or fee service. Illustrations replace absent property photos.

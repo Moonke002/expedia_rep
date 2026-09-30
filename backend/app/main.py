@@ -1,23 +1,19 @@
-import csv
-import sqlite3
-from collections import defaultdict
-from contextlib import closing
-from datetime import date
-from pathlib import Path
-from typing import Any
-from uuid import uuid4
-
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 
-
-app = FastAPI(
-    title="Expedia Rep API",
-    description="Backend API for the Expedia Rep project.",
-    version="0.1.0",
+from .config import geoapify_status
+from .controllers.database import SESSION_DAYS, DatabaseController, StoreError
+from .controllers.geocoding import (
+    GeoapifyConfigurationError,
+    GeoapifyProviderError,
+    lookup_postcode_with_hotels,
 )
+from .controllers.search import SearchController
+from .models import AccountCreate, AccountLogin, BookingCreate, BookingStatusUpdate
 
+
+app = FastAPI(title="Expedia Rep API", description="SQLite-backed travel demo", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -25,196 +21,97 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
-
-DATA_DIR = Path(__file__).resolve().parents[1]
-HOTELS_FILE = DATA_DIR / "hotels.csv"
-TRIPS_FILE = DATA_DIR / "trips.csv"
-USERS_FILE = DATA_DIR / "users.csv"
-BOOKINGS_FILE = DATA_DIR / "bookings.csv"
-BOOKINGS_DB = DATA_DIR / "bookings.sqlite3"
-HOTEL_NAME_COLUMNS = ("hotel_name", "name", "hotel")
+controller = DatabaseController()
+SESSION_COOKIE = "expedia_demo_session"
 
 
-class BookingCreate(BaseModel):
-    user_id: str
-    trip_id: str
+def signed_in_user(request: Request) -> dict:
+    user = controller.current_user(request.cookies.get(SESSION_COOKIE))
+    if user is None:
+        raise StoreError("Sign in to manage bookings.", 401)
+    return user
 
 
-class BookingStatusUpdate(BaseModel):
-    status: str
+@app.exception_handler(StoreError)
+def store_error_handler(_request, error: StoreError) -> JSONResponse:
+    return JSONResponse(status_code=error.status_code, content={"detail": str(error)})
 
-
-def _read_csv(path: Path, label: str) -> list[dict[str, str]]:
-    if not path.exists():
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                f"{label} data is missing. Add {path.name} to "
-                f"{DATA_DIR} before searching."
-            ),
-        )
-
-    with path.open(newline="", encoding="utf-8-sig") as csv_file:
-        return list(csv.DictReader(csv_file))
-
-
-def _require_hotel_id(records: list[dict[str, str]], label: str) -> None:
-    if records and "hotel_id" not in records[0]:
-        raise HTTPException(
-            status_code=500,
-            detail=f"{label} data must contain a hotel_id column.",
-        )
-
-
-def _hotel_name(hotel: dict[str, str]) -> str:
-    for column in HOTEL_NAME_COLUMNS:
-        if hotel.get(column):
-            return hotel[column]
-    return hotel.get("hotel_id", "")
-
-
-def _search_results(hotel_name: str) -> list[dict[str, Any]]:
-    hotels = _read_csv(HOTELS_FILE, "Hotel")
-    trips = _read_csv(TRIPS_FILE, "Trip")
-    _require_hotel_id(hotels, "Hotels")
-    _require_hotel_id(trips, "Trips")
-
-    normalized_query = hotel_name.casefold()
-    matching_hotels = [
-        hotel
-        for hotel in hotels
-        if normalized_query in _hotel_name(hotel).casefold()
-    ]
-
-    trips_by_hotel: dict[str, list[dict[str, str]]] = defaultdict(list)
-    for trip in trips:
-        trips_by_hotel[trip.get("hotel_id", "")].append(trip)
-
-    return [
-        {"hotel": hotel, "stay": stay}
-        for hotel in matching_hotels
-        for stay in trips_by_hotel.get(hotel.get("hotel_id", ""), [])
-    ]
-
-
-def _booking_connection() -> sqlite3.Connection:
-    connection = sqlite3.connect(BOOKINGS_DB, timeout=10)
-    connection.row_factory = sqlite3.Row
-    connection.execute(
-        """CREATE TABLE IF NOT EXISTS bookings (
-            booking_id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            trip_id TEXT NOT NULL,
-            booked_on TEXT NOT NULL,
-            status TEXT NOT NULL CHECK (status IN ('confirmed', 'cancelled')),
-            source TEXT NOT NULL CHECK (source IN ('sample', 'created'))
-        )"""
-    )
-    connection.execute(
-        "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-    )
-    if connection.execute("SELECT 1 FROM metadata WHERE key = 'sample_seeded'").fetchone() is None:
-        for booking in _read_csv(BOOKINGS_FILE, "Booking"):
-            connection.execute(
-                "INSERT OR IGNORE INTO bookings VALUES (?, ?, ?, ?, ?, 'sample')",
-                (
-                    booking["booking_id"], booking["user_id"], booking["trip_id"],
-                    booking["booked_on"], booking["status"],
-                ),
-            )
-        connection.execute(
-            "INSERT INTO metadata (key, value) VALUES ('sample_seeded', '1')"
-        )
-    connection.commit()
-    return connection
-
-
-def _booking_details(booking: sqlite3.Row) -> dict[str, Any]:
-    trips = {trip["trip_id"]: trip for trip in _read_csv(TRIPS_FILE, "Trip")}
-    hotels = {hotel["hotel_id"]: hotel for hotel in _read_csv(HOTELS_FILE, "Hotel")}
-    trip = trips.get(booking["trip_id"])
-    hotel = hotels.get(trip["hotel_id"]) if trip else None
-    return {**dict(booking), "stay": trip, "hotel": hotel}
-
-
-def _find_booking(connection: sqlite3.Connection, booking_id: str) -> sqlite3.Row:
-    booking = connection.execute(
-        "SELECT * FROM bookings WHERE booking_id = ?", (booking_id,)
-    ).fetchone()
-    if booking is None:
-        raise HTTPException(status_code=404, detail="Booking not found.")
-    return booking
 
 @app.get("/health")
+@app.get("/api/health")
 def health_check() -> dict[str, str]:
-    """Return a simple liveness response."""
-    return {"status": "ok"}
+    return {"status": "ok", "geoapify_api_key": geoapify_status()}
+
+
+@app.get("/api/demo/zip-location")
+def demo_zip_location(postcode: str = Query(default="16802", pattern=r"^\d{5}$")) -> dict:
+    try:
+        location = lookup_postcode_with_hotels(postcode)
+    except GeoapifyConfigurationError as error:
+        raise HTTPException(status_code=503, detail="ZIP lookup is not configured.") from error
+    except GeoapifyProviderError as error:
+        raise HTTPException(status_code=502, detail="ZIP lookup provider failed.") from error
+    if location is None:
+        raise HTTPException(status_code=404, detail="ZIP code could not be resolved.")
+    return location
+
+
+@app.post("/api/auth/register", status_code=201)
+def register_account(request: AccountCreate) -> dict:
+    return {"user": controller.register_account(request.username, request.password, request.display_name)}
+
+
+@app.post("/api/auth/login")
+def login(request: AccountLogin, response: Response) -> dict:
+    user, token = controller.login(request.username, request.password)
+    response.set_cookie(
+        SESSION_COOKIE, token, max_age=SESSION_DAYS * 24 * 60 * 60,
+        httponly=True, samesite="lax", path="/"
+    )
+    return {"user": user}
+
+
+@app.post("/api/auth/logout", status_code=204)
+def logout(request: Request, response: Response) -> None:
+    controller.logout(request.cookies.get(SESSION_COOKIE))
+    response.delete_cookie(SESSION_COOKIE, path="/")
+
+
+@app.get("/api/auth/me")
+def current_user(request: Request) -> dict:
+    return {"user": controller.current_user(request.cookies.get(SESSION_COOKIE))}
 
 
 @app.get("/api/hotels/search")
 def search_hotels(
-    hotel_name: str = Query(default="", description="Hotel name to search for; blank lists all stays."),
-) -> dict[str, Any]:
-    """Return matching hotels joined to their available stays by hotel_id."""
-    query = hotel_name.strip()
-    results = _search_results(query)
-    return {"query": query, "results": results}
+    request: Request,
+    hotel_name: str = Query(default="", description="Blank lists all offered stays."),
+) -> dict:
+    user = controller.current_user(request.cookies.get(SESSION_COOKIE))
+    return SearchController(controller).search(hotel_name, user["user_id"] if user else None)
 
 
 @app.get("/api/users")
-def list_users() -> dict[str, Any]:
-    """List demo travelers available for simulated bookings."""
-    return {"users": _read_csv(USERS_FILE, "Traveler")}
+def list_users() -> dict:
+    return {"users": controller.list_users()}
 
 
 @app.get("/api/bookings")
-def list_bookings(user_id: str = Query(description="Demo traveler ID.")) -> dict[str, Any]:
-    """Return a traveler's persisted booking history."""
-    if user_id not in {user["user_id"] for user in _read_csv(USERS_FILE, "Traveler")}:
-        raise HTTPException(status_code=404, detail="Traveler not found.")
-    with closing(_booking_connection()) as connection, connection:
-        rows = connection.execute(
-            "SELECT * FROM bookings WHERE user_id = ? ORDER BY booked_on DESC, booking_id DESC",
-            (user_id,),
-        ).fetchall()
-        return {"bookings": [_booking_details(row) for row in rows]}
+def list_bookings(request: Request) -> dict:
+    return {"bookings": controller.list_bookings(signed_in_user(request)["user_id"])}
 
 
 @app.post("/api/bookings", status_code=201)
-def create_booking(request: BookingCreate) -> dict[str, Any]:
-    """Create a simulated booking for one offered stay."""
-    if request.user_id not in {user["user_id"] for user in _read_csv(USERS_FILE, "Traveler")}:
-        raise HTTPException(status_code=404, detail="Traveler not found.")
-    if request.trip_id not in {trip["trip_id"] for trip in _read_csv(TRIPS_FILE, "Trip")}:
-        raise HTTPException(status_code=404, detail="Stay not found.")
-    booking_id = f"B{uuid4().hex[:10].upper()}"
-    with closing(_booking_connection()) as connection, connection:
-        connection.execute(
-            "INSERT INTO bookings VALUES (?, ?, ?, ?, 'confirmed', 'created')",
-            (booking_id, request.user_id, request.trip_id, date.today().isoformat()),
-        )
-        return _booking_details(_find_booking(connection, booking_id))
+def create_booking(request: BookingCreate, http_request: Request) -> dict:
+    return controller.create_booking(signed_in_user(http_request)["user_id"], request.trip_id)
 
 
 @app.patch("/api/bookings/{booking_id}")
-def update_booking_status(booking_id: str, request: BookingStatusUpdate) -> dict[str, Any]:
-    """Cancel a booking while retaining it in history."""
-    if request.status != "cancelled":
-        raise HTTPException(status_code=422, detail="Only cancellation is supported.")
-    with closing(_booking_connection()) as connection, connection:
-        _find_booking(connection, booking_id)
-        connection.execute(
-            "UPDATE bookings SET status = 'cancelled' WHERE booking_id = ?", (booking_id,)
-        )
-        return _booking_details(_find_booking(connection, booking_id))
+def update_booking_status(booking_id: str, request: BookingStatusUpdate, http_request: Request) -> dict:
+    return controller.cancel_booking(booking_id, request.status, signed_in_user(http_request)["user_id"])
 
 
 @app.delete("/api/bookings/{booking_id}", status_code=204)
-def delete_test_booking(booking_id: str) -> Response:
-    """Delete a booking created in the demo UI; preserve supplied sample records."""
-    with closing(_booking_connection()) as connection, connection:
-        booking = _find_booking(connection, booking_id)
-        if booking["source"] != "created":
-            raise HTTPException(status_code=403, detail="Supplied sample bookings cannot be deleted.")
-        connection.execute("DELETE FROM bookings WHERE booking_id = ?", (booking_id,))
+def delete_test_booking(booking_id: str, request: Request) -> Response:
+    controller.delete_test_booking(booking_id, signed_in_user(request)["user_id"])
     return Response(status_code=204)

@@ -1,14 +1,23 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 
 const view = ref('stays')
 const hotelName = ref('')
 const submittedQuery = ref('')
 const results = ref([])
+const searchCount = ref(0)
+const resultsUserId = ref(null)
 const searchState = ref('loading')
 const searchError = ref('')
-const users = ref([])
-const selectedUserId = ref('')
+const authUser = ref(null)
+const authMode = ref('login')
+const authUsername = ref('')
+const authPassword = ref('')
+const authDisplayName = ref('')
+const authError = ref('')
+const authBusy = ref(false)
 const bookings = ref([])
 const bookingState = ref('loading')
 const bookingError = ref('')
@@ -22,13 +31,27 @@ const calendarOpen = ref(false)
 const calendarOffset = ref(0)
 const planningStart = ref('')
 const planningEnd = ref('')
+const zipPostcode = ref('16802')
+const zipState = ref('idle')
+const zipLocation = ref(null)
+const zipError = ref('')
+const zipMapElement = ref(null)
+const selectedZipHotelId = ref('')
+const selectedZipHotel = computed(() => zipLocation.value?.hotels?.find((hotel) => zipHotelId(hotel) === selectedZipHotelId.value) ?? null)
 const weekdays = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
+let zipMap = null
+let zipCenterMarker = null
+const zipHotelMarkers = new Map()
 
 async function api(path, options = {}) {
-  const response = await fetch(path, options)
+  const response = await fetch(path, { credentials: 'same-origin', ...options })
   if (response.status === 204) return null
   const payload = await response.json()
-  if (!response.ok) throw new Error(payload.detail ?? 'The request could not be completed.')
+  if (!response.ok) {
+    const error = new Error(payload.detail ?? 'The request could not be completed.')
+    error.status = response.status
+    throw error
+  }
   return payload
 }
 
@@ -40,9 +63,12 @@ async function searchHotels() {
   selectedPrice.value = 'all'
   sortBy.value = 'recommended'
   submittedQuery.value = hotelName.value.trim()
+  const searchingUserId = authUser.value?.user_id ?? null
   try {
     const payload = await api(`/api/hotels/search?hotel_name=${encodeURIComponent(submittedQuery.value)}`)
     results.value = payload.results
+    searchCount.value = payload.matching_searches_today
+    resultsUserId.value = searchingUserId
     searchState.value = 'ready'
     view.value = 'stays'
   } catch (error) {
@@ -51,23 +77,45 @@ async function searchHotels() {
   }
 }
 
-async function loadUsers() {
+async function lookupZip() {
+  zipState.value = 'loading'
+  zipLocation.value = null
+  zipError.value = ''
+  const postcode = zipPostcode.value.trim()
+  if (!/^\d{5}$/.test(postcode)) {
+    zipError.value = 'Enter a five-digit U.S. ZIP code.'
+    zipState.value = 'invalid'
+    return
+  }
   try {
-    const payload = await api('/api/users')
-    users.value = payload.users
-    selectedUserId.value = payload.users[0]?.user_id ?? ''
+    zipLocation.value = await api(`/api/demo/zip-location?postcode=${encodeURIComponent(postcode)}`)
+    zipState.value = zipLocation.value.hotels?.length ? 'results' : 'no-results'
   } catch (error) {
-    bookingError.value = error.message
-    bookingState.value = 'error'
+    if (error.status === 404) {
+      zipError.value = 'Geoapify could not confirm this as the requested U.S. ZIP code. No hotel search was performed.'
+      zipState.value = 'unresolved'
+    } else {
+      zipError.value = error.message || 'The ZIP lookup request failed. Please try again.'
+      zipState.value = 'failure'
+    }
+  }
+}
+
+async function loadSession() {
+  try {
+    const payload = await api('/api/auth/me')
+    authUser.value = payload.user
+  } catch (error) {
+    authError.value = error.message
   }
 }
 
 async function loadBookings() {
-  if (!selectedUserId.value) return
+  if (!authUser.value) return
   bookingState.value = 'loading'
   bookingError.value = ''
   try {
-    const payload = await api(`/api/bookings?user_id=${encodeURIComponent(selectedUserId.value)}`)
+    const payload = await api('/api/bookings')
     bookings.value = payload.bookings
     bookingState.value = 'ready'
   } catch (error) {
@@ -76,25 +124,65 @@ async function loadBookings() {
   }
 }
 
-watch(selectedUserId, loadBookings)
-onMounted(() => {
-  searchHotels()
-  loadUsers()
+onMounted(async () => {
+  await loadSession()
+  await searchHotels()
 })
+
+async function submitAccount() {
+  authBusy.value = true
+  authError.value = ''
+  try {
+    if (authMode.value === 'register') {
+      await api('/api/auth/register', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: authUsername.value, password: authPassword.value, display_name: authDisplayName.value }),
+      })
+      authPassword.value = ''
+      authMode.value = 'login'
+      notice.value = 'Demo account created. Sign in to personalize searches and see your bookings.'
+    } else {
+      const payload = await api('/api/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: authUsername.value, password: authPassword.value }),
+      })
+      authUser.value = payload.user
+      authPassword.value = ''
+      view.value = 'stays'
+      notice.value = `Signed in as ${payload.user.username}. Submit a hotel search to see your personalized rate.`
+    }
+  } catch (error) {
+    authError.value = error.message
+  } finally {
+    authBusy.value = false
+  }
+}
+
+async function logout() {
+  try {
+    await api('/api/auth/logout', { method: 'POST' })
+    authUser.value = null
+    bookings.value = []
+    await searchHotels()
+    notice.value = 'Signed out. Searches now show base rates.'
+  } catch (error) {
+    authError.value = error.message
+  }
+}
 
 const cityOptions = computed(() => [...new Set(results.value.map((item) => item.hotel.city))].sort())
 const priceOptions = computed(() =>
-  [...new Set(results.value.map((item) => Number(item.hotel.nightly_rate_usd)))].sort((a, b) => a - b),
+  [...new Set(results.value.map((item) => Number(item.pricing.displayed_nightly_rate_usd)))].sort((a, b) => a - b),
 )
 const filteredResults = computed(() => {
   const matches = results.value.filter((item) => {
     const cityMatches = selectedCity.value === 'all' || item.hotel.city === selectedCity.value
-    const rate = Number(item.hotel.nightly_rate_usd)
+    const rate = Number(item.pricing.displayed_nightly_rate_usd)
     const priceMatches = selectedPrice.value === 'all' || rate <= Number(selectedPrice.value)
     return cityMatches && priceMatches
   })
-  if (sortBy.value === 'price-low') matches.sort((a, b) => Number(a.hotel.nightly_rate_usd) - Number(b.hotel.nightly_rate_usd))
-  if (sortBy.value === 'price-high') matches.sort((a, b) => Number(b.hotel.nightly_rate_usd) - Number(a.hotel.nightly_rate_usd))
+  if (sortBy.value === 'price-low') matches.sort((a, b) => Number(a.pricing.displayed_nightly_rate_usd) - Number(b.pricing.displayed_nightly_rate_usd))
+  if (sortBy.value === 'price-high') matches.sort((a, b) => Number(b.pricing.displayed_nightly_rate_usd) - Number(a.pricing.displayed_nightly_rate_usd))
   return matches
 })
 
@@ -114,12 +202,12 @@ function money(value) {
   if (value === null || value === undefined || value === '') return '—'
   const amount = Number(value)
   return Number.isFinite(amount)
-    ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(amount)
+    ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(amount)
     : '—'
 }
 
 function stayTotal(item) {
-  const rate = Number(item.hotel?.nightly_rate_usd)
+  const rate = Number(item.pricing?.displayed_nightly_rate_usd)
   const nights = stayNights(item.stay)
   return Number.isFinite(rate) && nights ? money(rate * nights) : '—'
 }
@@ -129,9 +217,96 @@ function dateLabel(value) {
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T12:00:00Z`))
 }
 
+function distanceLabel(value) {
+  const distance = Number(value)
+  return Number.isFinite(distance) ? `${(distance / 1000).toFixed(1)} km` : '—'
+}
+
+function zipHotelId(hotel) {
+  return `${hotel.name}|${hotel.latitude}|${hotel.longitude}`
+}
+
+function hotelMarkerIcon(selected = false) {
+  return L.divIcon({
+    className: 'zip-map-marker-shell',
+    html: `<span class="zip-map-marker${selected ? ' selected' : ''}"></span>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  })
+}
+
+function selectZipHotel(hotel) {
+  selectedZipHotelId.value = zipHotelId(hotel)
+}
+
+function clearZipHotelMarkers() {
+  for (const marker of zipHotelMarkers.values()) marker.remove()
+  zipHotelMarkers.clear()
+}
+
+watch(zipLocation, async (location) => {
+  await nextTick()
+  if (!location || !zipMapElement.value) {
+    clearZipHotelMarkers()
+    zipCenterMarker?.remove()
+    zipCenterMarker = null
+    zipMap?.remove()
+    zipMap = null
+    selectedZipHotelId.value = ''
+    return
+  }
+
+  const center = [location.latitude, location.longitude]
+  if (!zipMap) {
+    zipMap = L.map(zipMapElement.value, { scrollWheelZoom: false }).setView(center, 13)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(zipMap)
+  } else {
+    zipMap.setView(center, 13)
+  }
+
+  clearZipHotelMarkers()
+  zipCenterMarker?.remove()
+  zipCenterMarker = L.circleMarker(center, {
+    radius: 7,
+    color: '#fff',
+    weight: 2,
+    fillColor: '#164f83',
+    fillOpacity: 1,
+  }).addTo(zipMap).bindTooltip(`ZIP ${location.postcode} search center`)
+
+  for (const hotel of location.hotels ?? []) {
+    const id = zipHotelId(hotel)
+    const marker = L.marker([hotel.latitude, hotel.longitude], {
+      icon: hotelMarkerIcon(id === selectedZipHotelId.value),
+      title: hotel.name,
+      alt: hotel.name,
+    }).addTo(zipMap)
+    marker.on('click', () => selectZipHotel(hotel))
+    zipHotelMarkers.set(id, marker)
+  }
+  window.setTimeout(() => zipMap?.invalidateSize(), 0)
+}, { flush: 'post' })
+
+watch(selectedZipHotelId, (selectedId) => {
+  for (const [id, marker] of zipHotelMarkers.entries()) {
+    marker.setIcon(hotelMarkerIcon(id === selectedId))
+  }
+})
+
+onBeforeUnmount(() => {
+  clearZipHotelMarkers()
+  zipCenterMarker?.remove()
+  zipMap?.remove()
+})
+
 async function createBooking(item) {
-  if (!selectedUserId.value) {
-    bookingError.value = 'Choose a demo traveler before booking.'
+  if (!authUser.value) {
+    view.value = 'account'
+    authMode.value = 'login'
+    authError.value = 'Sign in before creating a demo booking.'
     return
   }
   busyBookingId.value = item.stay.trip_id
@@ -140,7 +315,7 @@ async function createBooking(item) {
     const booking = await api('/api/bookings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: selectedUserId.value, trip_id: item.stay.trip_id }),
+      body: JSON.stringify({ trip_id: item.stay.trip_id }),
     })
     await loadBookings()
     view.value = 'bookings'
@@ -186,6 +361,12 @@ async function deleteBooking(booking) {
 }
 
 function showView(nextView) {
+  if (nextView === 'bookings' && !authUser.value) {
+    view.value = 'account'
+    authMode.value = 'login'
+    authError.value = 'Sign in to view your booking history.'
+    return
+  }
   view.value = nextView
   notice.value = ''
   if (nextView === 'bookings') loadBookings()
@@ -235,12 +416,10 @@ function choosePlanningDate(value) {
           <button type="button" :class="{ active: view === 'stays' }" @click="showView('stays')">Explore stays</button>
           <button type="button" :class="{ active: view === 'bookings' }" @click="showView('bookings')">Booking history</button>
         </nav>
-        <label class="traveler-picker">
-          <span>Demo traveler</span>
-          <select v-model="selectedUserId" aria-label="Demo traveler">
-            <option v-for="user in users" :key="user.user_id" :value="user.user_id">{{ user.display_name }}</option>
-          </select>
-        </label>
+        <div class="account-nav">
+          <template v-if="authUser"><span>Hi, {{ authUser.username }}</span><button type="button" @click="logout">Log out</button></template>
+          <button v-else type="button" @click="view = 'account'; authMode = 'login'; authError = ''">Sign in / Create account</button>
+        </div>
       </div>
     </header>
 
@@ -269,7 +448,7 @@ function choosePlanningDate(value) {
       </section>
 
       <div class="content-wrap">
-        <section class="search-card" aria-labelledby="search-title">
+        <section v-if="view !== 'account'" class="search-card" aria-labelledby="search-title">
           <div class="search-card-heading">
             <div>
               <p class="eyebrow">Find a hotel</p>
@@ -293,6 +472,7 @@ function choosePlanningDate(value) {
             </button>
           </form>
           <p class="field-note">Planning dates help you compare options; each offer keeps the fixed dates shown below.</p>
+          <p v-if="authUser && resultsUserId === authUser.user_id && submittedQuery && searchState === 'ready'" class="search-frequency" role="status">Your matching searches today (UTC): {{ searchCount }}. A 20% demo surge starts at 4.</p>
           <div v-if="calendarOpen" class="calendar" role="dialog" aria-label="Choose planning dates">
             <div class="calendar-toolbar">
               <strong>Select planning dates</strong>
@@ -318,10 +498,81 @@ function choosePlanningDate(value) {
           </div>
         </section>
 
+        <section v-if="view === 'stays'" class="zip-card" aria-labelledby="zip-title">
+          <div class="zip-heading">
+            <p class="eyebrow">Location demo</p>
+            <h2 id="zip-title">ZIP lookup demonstration</h2>
+            <p class="zip-description">Check the demo postcode through the backend geocoder.</p>
+          </div>
+          <form class="zip-form" novalidate @submit.prevent="lookupZip">
+            <label for="zip-postcode">ZIP code</label>
+            <input id="zip-postcode" v-model="zipPostcode" type="text" inputmode="numeric" autocomplete="postal-code" maxlength="5" pattern="[0-9]{5}" placeholder="16802" required />
+            <button class="secondary-button zip-button" type="submit" :disabled="zipState === 'loading'">
+              {{ zipState === 'loading' ? 'Looking up…' : 'Look up ZIP' }}
+            </button>
+          </form>
+          <p v-if="zipState === 'loading'" class="zip-status" role="status">Looking up ZIP {{ zipPostcode.trim() }}…</p>
+          <p v-else-if="zipState === 'invalid'" class="notice error zip-message" role="alert">Invalid ZIP: {{ zipError }}</p>
+          <p v-else-if="zipState === 'unresolved'" class="notice error zip-message" role="alert">ZIP not resolved: {{ zipError }}</p>
+          <p v-else-if="zipState === 'failure'" class="notice error zip-message" role="alert">ZIP lookup failed: {{ zipError }}</p>
+          <table v-else-if="zipLocation" class="zip-result" aria-label="ZIP location result">
+            <caption>Location for {{ zipLocation.postcode }}</caption>
+            <tbody>
+              <tr><th scope="row">Postcode</th><td>{{ zipLocation.postcode }}</td></tr>
+              <tr v-if="zipLocation.locality"><th scope="row">Locality</th><td>{{ zipLocation.locality }}</td></tr>
+              <tr><th scope="row">Latitude</th><td>{{ zipLocation.latitude }}</td></tr>
+              <tr><th scope="row">Longitude</th><td>{{ zipLocation.longitude }}</td></tr>
+            </tbody>
+          </table>
+          <div v-if="zipLocation" class="zip-hotels">
+            <h3>Nearby hotels within 5 km</h3>
+            <p v-if="zipState === 'no-results'" class="zip-empty" role="status">ZIP resolved to {{ zipLocation.locality || zipLocation.postcode }}, but no nearby hotels were returned within 5 km.</p>
+            <div v-else class="zip-hotel-explorer">
+              <div class="zip-hotel-list" role="listbox" aria-label="Hotels within 5 km">
+                <button
+                  v-for="hotel in zipLocation.hotels"
+                  :key="zipHotelId(hotel)"
+                  type="button"
+                  role="option"
+                  class="zip-hotel-option"
+                  :class="{ selected: selectedZipHotelId === zipHotelId(hotel) }"
+                  :aria-selected="selectedZipHotelId === zipHotelId(hotel)"
+                  @click="selectZipHotel(hotel)"
+                >
+                  <strong>{{ hotel.name }}</strong>
+                  <span>{{ hotel.locality || 'Locality unavailable' }}</span>
+                  <small v-if="hotel.address">{{ hotel.address }}</small>
+                  <small>Coordinates: {{ hotel.latitude }}, {{ hotel.longitude }}</small>
+                  <small>Distance from ZIP center: {{ distanceLabel(hotel.distance_meters) }}</small>
+                </button>
+              </div>
+              <div ref="zipMapElement" class="zip-map" role="application" :aria-label="`Map of hotels near ZIP ${zipLocation.postcode}`"></div>
+            </div>
+            <p v-if="selectedZipHotel" class="zip-map-selection" role="status">
+              Selected hotel: {{ selectedZipHotel.name }} — highlighted in the list and on the map.
+            </p>
+          </div>
+        </section>
+
         <p v-if="notice" class="notice success" role="status">{{ notice }}</p>
         <p v-if="bookingError" class="notice error" role="alert">{{ bookingError }}</p>
 
-        <template v-if="view === 'stays'">
+        <section v-if="view === 'account'" class="account-card" aria-labelledby="account-title">
+          <p class="eyebrow">Your demo account</p>
+          <h2 id="account-title">{{ authMode === 'login' ? 'Sign in' : 'Create an account' }}</h2>
+          <p>Use made-up demo credentials only. No real reservation or payment is made.</p>
+          <form class="account-form" @submit.prevent="submitAccount">
+            <label>Username<input v-model.trim="authUsername" autocomplete="username" required minlength="3" maxlength="30" /></label>
+            <label v-if="authMode === 'register'">Display name (optional)<input v-model.trim="authDisplayName" autocomplete="nickname" maxlength="80" /></label>
+            <label>Password<input v-model="authPassword" type="password" :autocomplete="authMode === 'login' ? 'current-password' : 'new-password'" required minlength="8" /></label>
+            <p v-if="authError" class="notice error" role="alert">{{ authError }}</p>
+            <button class="primary-button" type="submit" :disabled="authBusy">{{ authBusy ? 'Please wait…' : authMode === 'login' ? 'Sign in' : 'Create account' }}</button>
+          </form>
+          <button class="text-button" type="button" @click="authMode = authMode === 'login' ? 'register' : 'login'; authError = ''; notice = ''">{{ authMode === 'login' ? 'New here? Create a demo account' : 'Already have an account? Sign in' }}</button>
+          <p class="demo-hint">Seeded demo: username <code>demo1</code>, password <code>DemoPass123!</code>.</p>
+        </section>
+
+        <template v-else-if="view === 'stays'">
           <section class="section-head" aria-labelledby="results-title">
             <div><p class="eyebrow">Hotels and stays</p><h2 id="results-title">{{ submittedQuery ? `Results for “${submittedQuery}”` : 'Explore available stays' }}</h2></div>
             <span v-if="searchState === 'ready'" class="result-count">{{ filteredResults.length }} stay{{ filteredResults.length === 1 ? '' : 's' }}</span>
@@ -351,19 +602,20 @@ function choosePlanningDate(value) {
                   <p class="stay-dates">{{ dateLabel(item.stay.check_in) }} – {{ dateLabel(item.stay.check_out) }} <span v-if="stayNights(item.stay)">· {{ stayNights(item.stay) }} nights</span></p>
                 </div>
                 <div class="stay-price">
-                  <span>From</span><strong>{{ money(item.hotel.nightly_rate_usd) }}</strong><small>per night</small>
+                  <span>Displayed nightly rate</span><strong>{{ money(item.pricing.displayed_nightly_rate_usd) }}</strong><small>per night</small>
+                  <span v-if="item.pricing.surge_applied" class="surge-note">20% demo surge · base {{ money(item.pricing.base_nightly_rate_usd) }}</span>
                   <p>{{ stayTotal(item) }} stay total*</p>
                   <button class="primary-button" type="button" :disabled="busyBookingId === item.stay.trip_id" @click="createBooking(item)">{{ busyBookingId === item.stay.trip_id ? 'Booking…' : 'Book this stay' }}</button>
                 </div>
               </article>
             </div>
-            <p v-if="filteredResults.length" class="price-disclaimer">* Simulated total is nightly rate × nights. Taxes and fees are not in the supplied data. Booking does not reserve inventory or charge a card.</p>
+            <p v-if="filteredResults.length" class="price-disclaimer">* Simulated total is displayed nightly rate × nights. For signed-in users, the fourth matching hotel-name search in a UTC day raises the displayed rate by 20% once. This classroom urgency assumption is not evidence of actual urgency. Base rates stay unchanged; taxes, fees, inventory, and payment are not included.</p>
           </template>
         </template>
 
         <section v-else class="history-section" aria-labelledby="history-title">
           <div class="section-head"><div><p class="eyebrow">Your demo trips</p><h2 id="history-title">Booking history</h2></div><span v-if="bookingState === 'ready'" class="result-count">{{ bookings.length }} booking{{ bookings.length === 1 ? '' : 's' }}</span></div>
-          <p class="history-intro">Bookings are stored locally for this demo traveler. Cancelling keeps a record in history.</p>
+          <p class="history-intro">Bookings for {{ authUser?.username }} are stored locally. Cancelling keeps a record in history.</p>
           <p v-if="bookingState === 'loading'" class="empty-state" role="status">Loading booking history…</p>
           <p v-else-if="bookingState === 'error'" class="empty-state error" role="alert">{{ bookingError }}</p>
           <p v-else-if="!bookings.length" class="empty-state" role="status">No bookings yet for this traveler. Explore stays to create one.</p>
