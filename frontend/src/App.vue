@@ -1,5 +1,7 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 
 const view = ref('stays')
 const hotelName = ref('')
@@ -29,13 +31,27 @@ const calendarOpen = ref(false)
 const calendarOffset = ref(0)
 const planningStart = ref('')
 const planningEnd = ref('')
+const zipPostcode = ref('16802')
+const zipState = ref('idle')
+const zipLocation = ref(null)
+const zipError = ref('')
+const zipMapElement = ref(null)
+const selectedZipHotelId = ref('')
+const selectedZipHotel = computed(() => zipLocation.value?.hotels?.find((hotel) => zipHotelId(hotel) === selectedZipHotelId.value) ?? null)
 const weekdays = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
+let zipMap = null
+let zipCenterMarker = null
+const zipHotelMarkers = new Map()
 
 async function api(path, options = {}) {
   const response = await fetch(path, { credentials: 'same-origin', ...options })
   if (response.status === 204) return null
   const payload = await response.json()
-  if (!response.ok) throw new Error(payload.detail ?? 'The request could not be completed.')
+  if (!response.ok) {
+    const error = new Error(payload.detail ?? 'The request could not be completed.')
+    error.status = response.status
+    throw error
+  }
   return payload
 }
 
@@ -58,6 +74,30 @@ async function searchHotels() {
   } catch (error) {
     searchError.value = error.message
     searchState.value = 'error'
+  }
+}
+
+async function lookupZip() {
+  zipState.value = 'loading'
+  zipLocation.value = null
+  zipError.value = ''
+  const postcode = zipPostcode.value.trim()
+  if (!/^\d{5}$/.test(postcode)) {
+    zipError.value = 'Enter a five-digit U.S. ZIP code.'
+    zipState.value = 'invalid'
+    return
+  }
+  try {
+    zipLocation.value = await api(`/api/demo/zip-location?postcode=${encodeURIComponent(postcode)}`)
+    zipState.value = zipLocation.value.hotels?.length ? 'results' : 'no-results'
+  } catch (error) {
+    if (error.status === 404) {
+      zipError.value = 'Geoapify could not confirm this as the requested U.S. ZIP code. No hotel search was performed.'
+      zipState.value = 'unresolved'
+    } else {
+      zipError.value = error.message || 'The ZIP lookup request failed. Please try again.'
+      zipState.value = 'failure'
+    }
   }
 }
 
@@ -176,6 +216,91 @@ function dateLabel(value) {
   if (!value) return 'Date unavailable'
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T12:00:00Z`))
 }
+
+function distanceLabel(value) {
+  const distance = Number(value)
+  return Number.isFinite(distance) ? `${(distance / 1000).toFixed(1)} km` : '—'
+}
+
+function zipHotelId(hotel) {
+  return `${hotel.name}|${hotel.latitude}|${hotel.longitude}`
+}
+
+function hotelMarkerIcon(selected = false) {
+  return L.divIcon({
+    className: 'zip-map-marker-shell',
+    html: `<span class="zip-map-marker${selected ? ' selected' : ''}"></span>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  })
+}
+
+function selectZipHotel(hotel) {
+  selectedZipHotelId.value = zipHotelId(hotel)
+}
+
+function clearZipHotelMarkers() {
+  for (const marker of zipHotelMarkers.values()) marker.remove()
+  zipHotelMarkers.clear()
+}
+
+watch(zipLocation, async (location) => {
+  await nextTick()
+  if (!location || !zipMapElement.value) {
+    clearZipHotelMarkers()
+    zipCenterMarker?.remove()
+    zipCenterMarker = null
+    zipMap?.remove()
+    zipMap = null
+    selectedZipHotelId.value = ''
+    return
+  }
+
+  const center = [location.latitude, location.longitude]
+  if (!zipMap) {
+    zipMap = L.map(zipMapElement.value, { scrollWheelZoom: false }).setView(center, 13)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(zipMap)
+  } else {
+    zipMap.setView(center, 13)
+  }
+
+  clearZipHotelMarkers()
+  zipCenterMarker?.remove()
+  zipCenterMarker = L.circleMarker(center, {
+    radius: 7,
+    color: '#fff',
+    weight: 2,
+    fillColor: '#164f83',
+    fillOpacity: 1,
+  }).addTo(zipMap).bindTooltip(`ZIP ${location.postcode} search center`)
+
+  for (const hotel of location.hotels ?? []) {
+    const id = zipHotelId(hotel)
+    const marker = L.marker([hotel.latitude, hotel.longitude], {
+      icon: hotelMarkerIcon(id === selectedZipHotelId.value),
+      title: hotel.name,
+      alt: hotel.name,
+    }).addTo(zipMap)
+    marker.on('click', () => selectZipHotel(hotel))
+    zipHotelMarkers.set(id, marker)
+  }
+  window.setTimeout(() => zipMap?.invalidateSize(), 0)
+}, { flush: 'post' })
+
+watch(selectedZipHotelId, (selectedId) => {
+  for (const [id, marker] of zipHotelMarkers.entries()) {
+    marker.setIcon(hotelMarkerIcon(id === selectedId))
+  }
+})
+
+onBeforeUnmount(() => {
+  clearZipHotelMarkers()
+  zipCenterMarker?.remove()
+  zipMap?.remove()
+})
 
 async function createBooking(item) {
   if (!authUser.value) {
@@ -370,6 +495,62 @@ function choosePlanningDate(value) {
               </div>
             </div>
             <p>Select a start and end date. This planning tool does not change the fixed stay offers.</p>
+          </div>
+        </section>
+
+        <section v-if="view === 'stays'" class="zip-card" aria-labelledby="zip-title">
+          <div class="zip-heading">
+            <p class="eyebrow">Location demo</p>
+            <h2 id="zip-title">ZIP lookup demonstration</h2>
+            <p class="zip-description">Check the demo postcode through the backend geocoder.</p>
+          </div>
+          <form class="zip-form" novalidate @submit.prevent="lookupZip">
+            <label for="zip-postcode">ZIP code</label>
+            <input id="zip-postcode" v-model="zipPostcode" type="text" inputmode="numeric" autocomplete="postal-code" maxlength="5" pattern="[0-9]{5}" placeholder="16802" required />
+            <button class="secondary-button zip-button" type="submit" :disabled="zipState === 'loading'">
+              {{ zipState === 'loading' ? 'Looking up…' : 'Look up ZIP' }}
+            </button>
+          </form>
+          <p v-if="zipState === 'loading'" class="zip-status" role="status">Looking up ZIP {{ zipPostcode.trim() }}…</p>
+          <p v-else-if="zipState === 'invalid'" class="notice error zip-message" role="alert">Invalid ZIP: {{ zipError }}</p>
+          <p v-else-if="zipState === 'unresolved'" class="notice error zip-message" role="alert">ZIP not resolved: {{ zipError }}</p>
+          <p v-else-if="zipState === 'failure'" class="notice error zip-message" role="alert">ZIP lookup failed: {{ zipError }}</p>
+          <table v-else-if="zipLocation" class="zip-result" aria-label="ZIP location result">
+            <caption>Location for {{ zipLocation.postcode }}</caption>
+            <tbody>
+              <tr><th scope="row">Postcode</th><td>{{ zipLocation.postcode }}</td></tr>
+              <tr v-if="zipLocation.locality"><th scope="row">Locality</th><td>{{ zipLocation.locality }}</td></tr>
+              <tr><th scope="row">Latitude</th><td>{{ zipLocation.latitude }}</td></tr>
+              <tr><th scope="row">Longitude</th><td>{{ zipLocation.longitude }}</td></tr>
+            </tbody>
+          </table>
+          <div v-if="zipLocation" class="zip-hotels">
+            <h3>Nearby hotels within 5 km</h3>
+            <p v-if="zipState === 'no-results'" class="zip-empty" role="status">ZIP resolved to {{ zipLocation.locality || zipLocation.postcode }}, but no nearby hotels were returned within 5 km.</p>
+            <div v-else class="zip-hotel-explorer">
+              <div class="zip-hotel-list" role="listbox" aria-label="Hotels within 5 km">
+                <button
+                  v-for="hotel in zipLocation.hotels"
+                  :key="zipHotelId(hotel)"
+                  type="button"
+                  role="option"
+                  class="zip-hotel-option"
+                  :class="{ selected: selectedZipHotelId === zipHotelId(hotel) }"
+                  :aria-selected="selectedZipHotelId === zipHotelId(hotel)"
+                  @click="selectZipHotel(hotel)"
+                >
+                  <strong>{{ hotel.name }}</strong>
+                  <span>{{ hotel.locality || 'Locality unavailable' }}</span>
+                  <small v-if="hotel.address">{{ hotel.address }}</small>
+                  <small>Coordinates: {{ hotel.latitude }}, {{ hotel.longitude }}</small>
+                  <small>Distance from ZIP center: {{ distanceLabel(hotel.distance_meters) }}</small>
+                </button>
+              </div>
+              <div ref="zipMapElement" class="zip-map" role="application" :aria-label="`Map of hotels near ZIP ${zipLocation.postcode}`"></div>
+            </div>
+            <p v-if="selectedZipHotel" class="zip-map-selection" role="status">
+              Selected hotel: {{ selectedZipHotel.name }} — highlighted in the list and on the map.
+            </p>
           </div>
         </section>
 

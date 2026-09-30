@@ -1,8 +1,14 @@
-from fastapi import FastAPI, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .config import geoapify_status
 from .controllers.database import SESSION_DAYS, DatabaseController, StoreError
+from .controllers.geocoding import (
+    GeoapifyConfigurationError,
+    GeoapifyProviderError,
+    lookup_postcode_with_hotels,
+)
 from .controllers.search import SearchController
 from .models import AccountCreate, AccountLogin, BookingCreate, BookingStatusUpdate
 
@@ -32,8 +38,22 @@ def store_error_handler(_request, error: StoreError) -> JSONResponse:
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health_check() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "geoapify_api_key": geoapify_status()}
+
+
+@app.get("/api/demo/zip-location")
+def demo_zip_location(postcode: str = Query(default="16802", pattern=r"^\d{5}$")) -> dict:
+    try:
+        location = lookup_postcode_with_hotels(postcode)
+    except GeoapifyConfigurationError as error:
+        raise HTTPException(status_code=503, detail="ZIP lookup is not configured.") from error
+    except GeoapifyProviderError as error:
+        raise HTTPException(status_code=502, detail="ZIP lookup provider failed.") from error
+    if location is None:
+        raise HTTPException(status_code=404, detail="ZIP code could not be resolved.")
+    return location
 
 
 @app.post("/api/auth/register", status_code=201)
