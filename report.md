@@ -15,6 +15,7 @@ The ZIP lookup demonstration accepts a five-digit U.S. ZIP code, including leadi
 <video controls width="720" src="https://raw.githubusercontent.com/Moonke002/expedia_rep/main/docs/assets/zip-lookup-demo.mp4">
   Your browser does not support embedded video. [Download or watch the ZIP lookup demonstration](https://raw.githubusercontent.com/Moonke002/expedia_rep/main/docs/assets/zip-lookup-demo.mp4).
 </video>
+(https://raw.githubusercontent.com/Moonke002/expedia_rep/main/docs/assets/zip-lookup-demo.mp4)
 
 ## Verification
 
