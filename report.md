@@ -10,7 +10,11 @@ The Vue frontend provides hotel search, filters, simulated booking, booking hist
 
 The ZIP lookup demonstration accepts a five-digit U.S. ZIP code, including leading zeros. FastAPI sends Geoapify geocoding and Places requests using the backend-only key from the ignored project-root `.env`. It searches for nearby hotels only after Geoapify confirms the requested U.S. postcode, and centers the 5 km Places search on the returned coordinates. Vue displays the returned hotels in a list and a Leaflet map; selecting either a list entry or a map marker identifies the same hotel in both. Names, localities, coordinates, and distances come from the backend response, with missing optional locality labeled as unavailable. The ZIP results invent no prices, ratings, room availability, or booking confirmations. The map uses OpenStreetMap tiles without a browser-visible tile key.
 
-**Screen recording:** [Watch the ZIP lookup demonstration](https://raw.githubusercontent.com/Moonke002/expedia_rep/main/docs/assets/zip-lookup-demo.mp4) (MP4 hosted in this public repository).
+**Screen recording:**
+
+<video controls width="720" src="https://raw.githubusercontent.com/Moonke002/expedia_rep/main/docs/assets/zip-lookup-demo.mp4">
+  Your browser does not support embedded video. [Download or watch the ZIP lookup demonstration](https://raw.githubusercontent.com/Moonke002/expedia_rep/main/docs/assets/zip-lookup-demo.mp4).
+</video>
 
 ## Verification
 
