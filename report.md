@@ -114,6 +114,7 @@ The [final RAG demonstration recording](docs/assets/rag-final-demo.mp4) shows th
 <video controls width="720" src="docs/assets/rag-final-demo.mp4">
   Your browser does not support embedded video. [Watch the final RAG demonstration](docs/assets/rag-final-demo.mp4).
 </video>
+(https://raw.githubusercontent.com/Moonke002/expedia_rep/main/docs/assets/zip-lookup-demo.mp4)
 
 ## AI use disclosure
 
