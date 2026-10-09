@@ -1,10 +1,11 @@
-# Expedia Rep — Assignment 2, Part 2
+# Expedia Rep — Retrieval-Grounded Travel Assistant
 
 ## Project access and submission state
 
 - **Repository:** [Moonke002/expedia_rep](https://github.com/Moonke002/expedia_rep)
-- **Working branch:** `rag_integration`
-- **Last committed baseline:** [`d03836e`](https://github.com/Moonke002/expedia_rep/commit/d03836e475d5af41ceed3560338e9eda09dfab27). The RAG and ZIP integration changes described here are in the current working tree; commit or push them before submitting if the instructor needs to review the latest version on GitHub.
+- **GitHub repository:** [Moonke002/expedia_rep](https://github.com/Moonke002/expedia_rep)
+- **Implementation branch:** [`rag_integration`](https://github.com/Moonke002/expedia_rep/tree/rag_integration)
+- **Default branch:** `master` includes this report and the RAG implementation for direct repository review.
 - **Setup and run instructions:** [README.md](README.md)
 - **Design and MVC responsibilities:** [docs/design.md](docs/design.md)
 - **RAG workflow evidence:** [docs/rag-context.md](docs/rag-context.md) and [docs/rag-verification.md](docs/rag-verification.md)
@@ -16,11 +17,11 @@ The frontend is Vue/Vite in `frontend/`; the FastAPI backend and SQLite database
 
 The design follows the supplied October 1 [Local Hotel Storage and Manual Verification activity](https://psu.instructure.com/courses/2484533/pages/in-class-activity-local-hotel-storage-and-manual-verification) and its [graded companion](https://psu.instructure.com/courses/2484533/assignments/18765499), then extends that foundation using the supplied IST 402 RAG lecture's retrieval-then-generation workflow. The [design note](docs/design.md) describes the existing MVC path and the new assistant's path through Vue, FastAPI, the database controller, and SQLite. The [selected RAG prompt](prompts/rag-integration.md) records the schema, read-only query, join, result-bound, date, and answer-grounding constraints used during implementation.
 
-The original chatbot mockup supplied for this report is [travel-assistant-original-mockup.png](docs/assets/travel-assistant-original-mockup.png). It shows the initial full-page assistant concept; the implementation was later adapted into a floating corner panel so it remains available over the hotel-search view. The repository also includes [the Part 2 search screenshot](docs/screenshots/part-2-search.png) and [the booking-history screenshot](docs/screenshots/part-2-history.png) as visual references for the existing application.
+The original chatbot mockup supplied for this report is [travel-assistant-original-mockup.png](docs/assets/travel-assistant-original-mockup.png). It shows the initial full-page assistant concept; the implementation was later adapted into a floating corner panel so it remains available over the hotel-search view. The repository also includes [the hotel-search screenshot](docs/screenshots/part-2-search.png) and [the booking-history screenshot](docs/screenshots/part-2-history.png) as visual references for the existing application.
 
 ## Application foundation
 
-The Part 2 feature extends the existing Expedia Rep application rather than replacing its supplied data or search flow:
+This retrieval feature extends the existing Expedia Rep application rather than replacing its supplied data or search flow:
 
 - Four supplied CSVs seed the assignment's hotel, trip, user, and booking tables once. Existing IDs and relationships remain intact; application reads and writes use SQLite after seeding.
 - ZIP search checks saved API hotels for the requested ZIP first. If none are saved there, the backend verifies the ZIP and searches Geoapify near that verified location. Add to Local and Remove from Local preserve provider identity and ZIP context.
@@ -102,7 +103,7 @@ Conversation `6164e904a68641fba122173f1cf28a60` is stored in SQLite. A read-only
 | Credential isolation | Credentials stay on the backend | `.env` is Git-ignored; `OPEN_AI` is passed explicitly to the OpenAI client; frontend chat sends only message and conversation ID. |
 | Existing application | Preserve seeded records, ZIP lookup and booking/search flows | Prior verification is recorded in `handoffs/current.md`; ZIP 19014 also resolved to Concord Township with nearby hotels in the live browser after the Geoapify key was updated. |
 
-Earlier Part 2 browser checks also observed Valley Trail Inn for the matching `Trail` search and the expected no-results state for `No Such Hotel`. Booking verification created a test booking, reloaded it from history, cancelled it while retaining the record, and then deleted that test booking; the seeded B001–B006 records remained present. The saved-hotel workflow was checked for save, five simulated nightly rows, remove, and absence after removal. These checks and the preserved database counts are summarized in [the current handoff](handoffs/current.md).
+Earlier application checks also observed Valley Trail Inn for the matching `Trail` search and the expected no-results state for `No Such Hotel`. Booking verification created a test booking, reloaded it from history, cancelled it while retaining the record, and then deleted that test booking; the seeded B001–B006 records remained present. The saved-hotel workflow was checked for save, five simulated nightly rows, remove, and absence after removal. These checks and the preserved database counts are summarized in [the current handoff](handoffs/current.md).
 
 Backend verification recorded for this branch includes 13 focused RAG/config/schema checks using mock responses and a six-test Geoapify suite. The Vue production build passed. The earlier full application checks, database counts, booking CRUD, and integrity results are summarized in [handoffs/current.md](handoffs/current.md). The embedded browser does not expose a Network panel; the application request was confirmed through FastAPI logs and source inspection of the frontend request body.
 
