@@ -3,11 +3,12 @@
 import csv
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 from uuid import uuid4
@@ -22,6 +23,15 @@ LEGACY_BOOKINGS_FILE = DATA_DIR / "bookings.sqlite3"
 DEMO_PASSWORD = "DemoPass123!"
 SESSION_DAYS = 7
 PASSWORD_ROUNDS = 200_000
+ASSISTANT_QUERY_TABLES = {
+    "saved_hotels": {"hotel_id", "name", "address", "latitude", "longitude"},
+    "saved_hotel_zips": {
+        "hotel_id", "postcode", "country_code", "latitude", "longitude", "locality",
+    },
+    "demo_hotel_nights": {"hotel_id", "stay_date", "nightly_rate_cents", "rooms_available"},
+}
+ASSISTANT_QUERY_FUNCTIONS = {"AVG", "COALESCE", "COUNT", "LOWER", "MAX", "MIN", "ROUND", "SUM", "UPPER"}
+ASSISTANT_QUERY_MAX_ROWS = 20
 
 
 def utc_now() -> datetime:
@@ -43,9 +53,18 @@ def password_matches(password: str, stored: str) -> bool:
 
 
 class StoreError(Exception):
-    def __init__(self, message: str, status_code: int = 503) -> None:
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 503,
+        conversation_id: str | None = None,
+        *,
+        retryable: bool = False,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.conversation_id = conversation_id
+        self.retryable = retryable
 
 
 class DatabaseController:
@@ -115,11 +134,247 @@ class DatabaseController:
             )""")
             connection.execute("""CREATE INDEX IF NOT EXISTS search_frequency
                 ON search_history(user_id, normalized_query, searched_at)""")
+            self._migrate_saved_hotel_tables(connection)
+            self._migrate_chat_tables(connection)
             connection.commit()
             self._ready = True
         except (OSError, sqlite3.DatabaseError, KeyError, ValueError) as error:
             connection.rollback()
             raise StoreError(f"Travel data could not be initialized: {error}") from error
+
+    @staticmethod
+    def _migrate_saved_hotel_tables(connection: sqlite3.Connection) -> None:
+        """Add storage for provider hotels and fictional nightly demo inventory.
+
+        CREATE TABLE IF NOT EXISTS makes this additive migration safe to run
+        for both existing databases and newly seeded databases on every
+        initialization.
+        """
+        connection.execute("""CREATE TABLE IF NOT EXISTS saved_hotels (
+            hotel_id TEXT NOT NULL PRIMARY KEY,
+            name TEXT,
+            address TEXT,
+            latitude REAL NOT NULL
+                CHECK (typeof(latitude) IN ('integer', 'real') AND latitude BETWEEN -90 AND 90),
+            longitude REAL NOT NULL
+                CHECK (typeof(longitude) IN ('integer', 'real') AND longitude BETWEEN -180 AND 180)
+        )""")
+        connection.execute("""CREATE TABLE IF NOT EXISTS demo_hotel_nights (
+            hotel_id TEXT NOT NULL REFERENCES saved_hotels(hotel_id),
+            stay_date TEXT NOT NULL CHECK (
+                length(stay_date) = 10
+                AND stay_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                AND strftime('%Y-%m-%d', stay_date, '+0 days') = stay_date
+            ),
+            nightly_rate_cents INTEGER NOT NULL DEFAULT 10000
+                CHECK (typeof(nightly_rate_cents) = 'integer' AND nightly_rate_cents >= 0),
+            rooms_available INTEGER NOT NULL DEFAULT 20
+                CHECK (typeof(rooms_available) = 'integer' AND rooms_available >= 0),
+            PRIMARY KEY (hotel_id, stay_date)
+        )""")
+        connection.execute("""CREATE TABLE IF NOT EXISTS saved_hotel_zips (
+            hotel_id TEXT NOT NULL REFERENCES saved_hotels(hotel_id),
+            postcode TEXT NOT NULL CHECK (
+                length(postcode) = 5
+                AND postcode GLOB '[0-9][0-9][0-9][0-9][0-9]'
+            ),
+            country_code TEXT NOT NULL CHECK (country_code = 'us'),
+            latitude REAL NOT NULL
+                CHECK (typeof(latitude) IN ('integer', 'real') AND latitude BETWEEN -90 AND 90),
+            longitude REAL NOT NULL
+                CHECK (typeof(longitude) IN ('integer', 'real') AND longitude BETWEEN -180 AND 180),
+            locality TEXT,
+            PRIMARY KEY (hotel_id, postcode)
+        )""")
+
+    @staticmethod
+    def _migrate_chat_tables(connection: sqlite3.Connection) -> None:
+        """Create durable conversation history tables without changing course data."""
+        connection.execute("""CREATE TABLE IF NOT EXISTS chat_conversations (
+            conversation_id TEXT NOT NULL PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+        connection.execute("""CREATE TABLE IF NOT EXISTS chat_messages (
+            message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL REFERENCES chat_conversations(conversation_id) ON DELETE CASCADE,
+            role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'error')),
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            proposed_sql TEXT,
+            retrieved_records_json TEXT
+        )""")
+        connection.execute("""CREATE INDEX IF NOT EXISTS chat_messages_by_conversation
+            ON chat_messages(conversation_id, message_id)""")
+
+    def create_chat_conversation(self) -> str:
+        conversation_id = uuid4().hex
+        now = self.clock().astimezone(timezone.utc).isoformat()
+        with closing(self._connect()) as connection, connection:
+            connection.execute(
+                "INSERT INTO chat_conversations (conversation_id, created_at, updated_at) VALUES (?, ?, ?)",
+                (conversation_id, now, now),
+            )
+        return conversation_id
+
+    def append_chat_message(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        *,
+        proposed_sql: str | None = None,
+        retrieved_records: list[dict] | None = None,
+    ) -> dict:
+        if role not in {"user", "assistant", "error"}:
+            raise ValueError("Unsupported chat history role.")
+        now = self.clock().astimezone(timezone.utc).isoformat()
+        records_json = (
+            json.dumps(retrieved_records, ensure_ascii=False, separators=(",", ":"))
+            if retrieved_records is not None else None
+        )
+        with closing(self._connect()) as connection, connection:
+            exists = connection.execute(
+                "SELECT 1 FROM chat_conversations WHERE conversation_id = ?", (conversation_id,)
+            ).fetchone()
+            if exists is None:
+                raise StoreError("Chat conversation was not found.", 404)
+            cursor = connection.execute(
+                """INSERT INTO chat_messages
+                   (conversation_id, role, content, created_at, proposed_sql, retrieved_records_json)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (conversation_id, role, content, now, proposed_sql, records_json),
+            )
+            connection.execute(
+                "UPDATE chat_conversations SET updated_at = ? WHERE conversation_id = ?",
+                (now, conversation_id),
+            )
+            return {
+                "message_id": cursor.lastrowid,
+                "conversation_id": conversation_id,
+                "role": role,
+                "content": content,
+                "created_at": now,
+                "proposed_sql": proposed_sql,
+                "retrieved_records": retrieved_records,
+            }
+
+    def get_chat_conversation(self, conversation_id: str) -> dict:
+        with closing(self._connect()) as connection:
+            conversation = connection.execute(
+                """SELECT conversation_id, created_at, updated_at
+                   FROM chat_conversations WHERE conversation_id = ?""",
+                (conversation_id,),
+            ).fetchone()
+            if conversation is None:
+                raise StoreError("Chat conversation was not found.", 404)
+            messages = []
+            for row in connection.execute(
+                """SELECT message_id, role, content, created_at, proposed_sql, retrieved_records_json
+                   FROM chat_messages WHERE conversation_id = ? ORDER BY message_id""",
+                (conversation_id,),
+            ):
+                messages.append({
+                    "message_id": row["message_id"],
+                    "role": row["role"],
+                    "content": row["content"],
+                    "created_at": row["created_at"],
+                    "proposed_sql": row["proposed_sql"],
+                    "retrieved_records": (
+                        json.loads(row["retrieved_records_json"])
+                        if row["retrieved_records_json"] is not None else None
+                    ),
+                })
+            return {**dict(conversation), "messages": messages}
+
+    def save_api_hotel(self, hotel: dict, location: dict) -> dict:
+        """Save one provider hotel, its ZIP context, and five fictional demo nights."""
+        provider_id = hotel["provider_id"]
+        postcode = location["postcode"]
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                connection.execute(
+                    """INSERT INTO saved_hotels (hotel_id, name, address, latitude, longitude)
+                       VALUES (?, ?, ?, ?, ?) ON CONFLICT(hotel_id) DO NOTHING""",
+                    (provider_id, hotel.get("name"), hotel.get("address"), hotel["latitude"], hotel["longitude"]),
+                )
+                connection.execute(
+                    """INSERT INTO saved_hotel_zips
+                       (hotel_id, postcode, country_code, latitude, longitude, locality)
+                       VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(hotel_id, postcode) DO UPDATE SET
+                           country_code=excluded.country_code, latitude=excluded.latitude,
+                           longitude=excluded.longitude, locality=excluded.locality""",
+                    (
+                        provider_id, postcode, location["country_code"], location["latitude"],
+                        location["longitude"], location.get("locality"),
+                    ),
+                )
+                first_night = date(2026, 10, 10)
+                for day_offset in range(5):
+                    stay_date = (first_night + timedelta(days=day_offset)).isoformat()
+                    connection.execute(
+                        """INSERT INTO demo_hotel_nights (hotel_id, stay_date) VALUES (?, ?)
+                           ON CONFLICT(hotel_id, stay_date) DO NOTHING""",
+                        (provider_id, stay_date),
+                    )
+        return {"provider_id": provider_id, "postcode": postcode, "saved": True}
+
+    def get_saved_hotels_for_postcode(self, postcode: str) -> dict:
+        with closing(self._connect()) as connection:
+            saved_provider_ids = [
+                row["hotel_id"] for row in connection.execute(
+                    "SELECT hotel_id FROM saved_hotels ORDER BY hotel_id"
+                )
+            ]
+            rows = connection.execute(
+                """SELECT h.hotel_id, h.name, h.address, h.latitude, h.longitude,
+                          z.country_code, z.latitude AS zip_latitude,
+                          z.longitude AS zip_longitude, z.locality
+                   FROM saved_hotel_zips z JOIN saved_hotels h ON h.hotel_id = z.hotel_id
+                   WHERE z.postcode = ? ORDER BY h.name COLLATE NOCASE, h.hotel_id""",
+                (postcode,),
+            ).fetchall()
+            hotels = []
+            for row in rows:
+                nights = connection.execute(
+                    """SELECT stay_date, nightly_rate_cents, rooms_available
+                       FROM demo_hotel_nights WHERE hotel_id = ? ORDER BY stay_date""",
+                    (row["hotel_id"],),
+                ).fetchall()
+                hotels.append({
+                    "provider_id": row["hotel_id"],
+                    "name": row["name"],
+                    "address": row["address"],
+                    "latitude": row["latitude"],
+                    "longitude": row["longitude"],
+                    "distance_meters": None,
+                    "nightly_rates": [dict(night) for night in nights],
+                })
+            result = {"postcode": postcode, "hotels": hotels, "saved_provider_ids": saved_provider_ids}
+            if rows:
+                result.update({
+                    "country_code": rows[0]["country_code"],
+                    "latitude": rows[0]["zip_latitude"],
+                    "longitude": rows[0]["zip_longitude"],
+                    "locality": rows[0]["locality"],
+                })
+            return result
+
+    def remove_saved_hotel(self, provider_id: str) -> bool:
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                exists = connection.execute(
+                    "SELECT 1 FROM saved_hotels WHERE hotel_id = ?", (provider_id,)
+                ).fetchone()
+                if exists is None:
+                    return False
+                connection.execute("DELETE FROM saved_hotel_zips WHERE hotel_id = ?", (provider_id,))
+                connection.execute("DELETE FROM demo_hotel_nights WHERE hotel_id = ?", (provider_id,))
+                connection.execute("DELETE FROM saved_hotels WHERE hotel_id = ?", (provider_id,))
+            return True
 
     def _csv_rows(self, name: str, columns: set[str]) -> list[dict[str, str]]:
         with (self.data_dir / name).open(newline="", encoding="utf-8-sig") as source:
@@ -213,6 +468,106 @@ class DatabaseController:
                 ).model_dump()
                 for row in rows
             ]
+
+    def retrieve_travel_records(self, question: str, limit: int = 12) -> list[dict]:
+        """Return relevant hotel offers as grounding context for the travel assistant."""
+        ignored_terms = {
+            "a", "all", "an", "and", "any", "are", "about", "available", "best", "can",
+            "cheapest", "cheap", "cost", "costs", "could", "do", "does", "expensive", "find",
+            "for", "good", "great", "have", "hotel", "hotels", "how", "i", "in", "is", "it",
+            "like", "lowest", "me", "more", "most", "much", "my", "near", "night", "nightly",
+            "of", "offer", "offers", "option", "options", "or", "our", "over", "per", "please",
+            "price", "prices", "rate", "rates", "recommend", "recommendation", "recommendations",
+            "should", "show", "some", "stay", "stays", "suggest", "suggestion", "suggestions",
+            "tell", "than", "the", "their", "them", "there", "these", "they", "this", "those",
+            "to", "under", "we", "what", "which", "where", "with", "would", "you", "your",
+        }
+        tokens = set(re.findall(r"[a-z0-9]+", question.casefold())) - ignored_terms
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                f"""SELECT {self._STAY_COLUMNS} FROM hotels h
+                    JOIN trips t ON t.hotel_id = h.hotel_id
+                    ORDER BY h.hotel_id, t.trip_id"""
+            ).fetchall()
+
+        ranked: list[tuple[int, dict]] = []
+        for row in rows:
+            facts = {
+                "hotel_id": row["hotel_id"],
+                "hotel_name": row["hotel_name"],
+                "city": row["city"],
+                "state": row["state"],
+                "base_nightly_rate_usd": row["nightly_rate_usd"],
+                "trip_id": row["trip_id"],
+                "trip_name": row["trip_name"],
+                "check_in": row["check_in"],
+                "check_out": row["check_out"],
+            }
+            searchable = " ".join(str(value) for value in facts.values()).casefold()
+            score = sum(token in searchable for token in tokens)
+            ranked.append((score, facts))
+
+        if tokens:
+            ranked = [item for item in ranked if item[0] > 0]
+        ranked.sort(key=lambda item: (-item[0], item[1]["base_nightly_rate_usd"], item[1]["hotel_id"]))
+        return [facts for _score, facts in ranked[:max(1, min(limit, 20))]]
+
+    @staticmethod
+    def _authorize_assistant_query(action: int, first: str | None, second: str | None,
+                                   database: str | None, _source: str | None) -> int:
+        if action == sqlite3.SQLITE_SELECT:
+            return sqlite3.SQLITE_OK
+        if action == sqlite3.SQLITE_READ:
+            allowed_columns = ASSISTANT_QUERY_TABLES.get(first or "")
+            if database == "main" and allowed_columns is not None and (not second or second in allowed_columns):
+                return sqlite3.SQLITE_OK
+            return sqlite3.SQLITE_DENY
+        if action == sqlite3.SQLITE_FUNCTION and (second or first or "").upper() in ASSISTANT_QUERY_FUNCTIONS:
+            return sqlite3.SQLITE_OK
+        return sqlite3.SQLITE_DENY
+
+    def execute_assistant_query(self, proposed_sql: str) -> list[dict]:
+        """Run a bounded SELECT against saved hotel data, never the core booking tables."""
+        query = proposed_sql.strip()
+        if query.endswith(";"):
+            query = query[:-1].rstrip()
+        if (
+            not query
+            or len(query) > 4000
+            or not re.match(r"(?is)^(SELECT|WITH)\b", query)
+            or ";" in query
+            or "--" in query
+            or "/*" in query
+            or "*/" in query
+        ):
+            raise StoreError("The proposed database query was not a single allowed SELECT.", 422)
+
+        if not self.db_path.is_file():
+            raise StoreError("The local saved-hotel database is not initialized yet.", 503)
+        database_uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
+        try:
+            with closing(sqlite3.connect(database_uri, uri=True, timeout=10)) as connection:
+                connection.row_factory = sqlite3.Row
+                connection.execute("PRAGMA query_only = ON")
+                connection.set_authorizer(self._authorize_assistant_query)
+                remaining_steps = [100]
+
+                def stop_expensive_query() -> int:
+                    remaining_steps[0] -= 1
+                    return int(remaining_steps[0] <= 0)
+
+                connection.set_progress_handler(stop_expensive_query, 1000)
+                bounded_query = (
+                    f"SELECT * FROM ({query}) AS assistant_results "
+                    f"LIMIT {ASSISTANT_QUERY_MAX_ROWS}"
+                )
+                return [dict(row) for row in connection.execute(bounded_query).fetchall()]
+        except (OSError, sqlite3.DatabaseError) as error:
+            raise StoreError(
+                "The proposed database query could not be safely executed.",
+                422,
+                retryable=True,
+            ) from error
 
     def record_search(self, user_id: str, query: str) -> int:
         normalized = query.strip().casefold()

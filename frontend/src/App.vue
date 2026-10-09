@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import TravelChat from './components/TravelChat.vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
@@ -35,6 +36,10 @@ const zipPostcode = ref('16802')
 const zipState = ref('idle')
 const zipLocation = ref(null)
 const zipError = ref('')
+const zipSource = ref('')
+const savedProviderIds = ref(new Set())
+const pendingHotelIds = ref(new Set())
+const zipActionFeedback = ref({ type: '', text: '' })
 const zipMapElement = ref(null)
 const selectedZipHotelId = ref('')
 const selectedZipHotel = computed(() => zipLocation.value?.hotels?.find((hotel) => zipHotelId(hotel) === selectedZipHotelId.value) ?? null)
@@ -46,7 +51,12 @@ const zipHotelMarkers = new Map()
 async function api(path, options = {}) {
   const response = await fetch(path, { credentials: 'same-origin', ...options })
   if (response.status === 204) return null
-  const payload = await response.json()
+  let payload = {}
+  try {
+    payload = await response.json()
+  } catch {
+    if (response.ok) throw new Error('The server returned an unreadable response.')
+  }
   if (!response.ok) {
     const error = new Error(payload.detail ?? 'The request could not be completed.')
     error.status = response.status
@@ -81,6 +91,8 @@ async function lookupZip() {
   zipState.value = 'loading'
   zipLocation.value = null
   zipError.value = ''
+  zipSource.value = ''
+  zipActionFeedback.value = { type: '', text: '' }
   const postcode = zipPostcode.value.trim()
   if (!/^\d{5}$/.test(postcode)) {
     zipError.value = 'Enter a five-digit U.S. ZIP code.'
@@ -88,7 +100,22 @@ async function lookupZip() {
     return
   }
   try {
+    let local
+    try {
+      local = await api(`/api/saved-hotels?postcode=${encodeURIComponent(postcode)}`)
+    } catch (error) {
+      throw new Error(`Could not check locally saved hotels: ${error.message}`, { cause: error })
+    }
+    savedProviderIds.value = new Set(local.saved_provider_ids ?? [])
+    if (local.hotels?.length) {
+      zipLocation.value = local
+      zipSource.value = 'local'
+      zipState.value = 'results'
+      return
+    }
+
     zipLocation.value = await api(`/api/demo/zip-location?postcode=${encodeURIComponent(postcode)}`)
+    zipSource.value = 'api'
     zipState.value = zipLocation.value.hotels?.length ? 'results' : 'no-results'
   } catch (error) {
     if (error.status === 404) {
@@ -98,6 +125,78 @@ async function lookupZip() {
       zipError.value = error.message || 'The ZIP lookup request failed. Please try again.'
       zipState.value = 'failure'
     }
+  }
+}
+
+function setPendingHotel(providerId, pending) {
+  const next = new Set(pendingHotelIds.value)
+  if (pending) next.add(providerId)
+  else next.delete(providerId)
+  pendingHotelIds.value = next
+}
+
+function setZipFeedback(type, text) {
+  zipActionFeedback.value = { type, text }
+}
+
+async function addHotelToLocal(hotel) {
+  const providerId = hotel.provider_id
+  if (!providerId || savedProviderIds.value.has(providerId) || pendingHotelIds.value.has(providerId)) return
+  setPendingHotel(providerId, true)
+  setZipFeedback('', '')
+  try {
+    await api('/api/saved-hotels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        hotel: {
+          provider_id: providerId,
+          name: hotel.name ?? null,
+          address: hotel.address ?? null,
+          latitude: hotel.latitude,
+          longitude: hotel.longitude,
+        },
+        location: {
+          postcode: zipLocation.value.postcode,
+          country_code: zipLocation.value.country_code,
+          latitude: zipLocation.value.latitude,
+          longitude: zipLocation.value.longitude,
+          locality: zipLocation.value.locality ?? null,
+        },
+      }),
+    })
+    savedProviderIds.value = new Set([...savedProviderIds.value, providerId])
+    setZipFeedback('success', `${hotel.name || 'Hotel'} saved locally for ZIP ${zipLocation.value.postcode}.`)
+  } catch (error) {
+    setZipFeedback('error', `Could not save ${hotel.name || 'this hotel'} locally: ${error.message}`)
+  } finally {
+    setPendingHotel(providerId, false)
+  }
+}
+
+async function removeHotelFromLocal(hotel) {
+  const providerId = hotel.provider_id
+  if (!providerId || !savedProviderIds.value.has(providerId) || pendingHotelIds.value.has(providerId)) return
+  setPendingHotel(providerId, true)
+  setZipFeedback('', '')
+  try {
+    await api(`/api/saved-hotels/${encodeURIComponent(providerId)}`, { method: 'DELETE' })
+    const nextSavedIds = new Set(savedProviderIds.value)
+    nextSavedIds.delete(providerId)
+    savedProviderIds.value = nextSavedIds
+    if (zipSource.value === 'local' && zipLocation.value) {
+      zipLocation.value = {
+        ...zipLocation.value,
+        hotels: zipLocation.value.hotels.filter((savedHotel) => savedHotel.provider_id !== providerId),
+      }
+      if (selectedZipHotelId.value === providerId) selectedZipHotelId.value = ''
+      if (!zipLocation.value.hotels.length) zipState.value = 'no-results'
+    }
+    setZipFeedback('success', `${hotel.name || 'Hotel'} removed from local storage.`)
+  } catch (error) {
+    setZipFeedback('error', `Could not remove ${hotel.name || 'this hotel'}: ${error.message}`)
+  } finally {
+    setPendingHotel(providerId, false)
   }
 }
 
@@ -223,7 +322,19 @@ function distanceLabel(value) {
 }
 
 function zipHotelId(hotel) {
-  return `${hotel.name}|${hotel.latitude}|${hotel.longitude}`
+  return hotel.provider_id || `${hotel.name}|${hotel.latitude}|${hotel.longitude}`
+}
+
+function isHotelSaved(hotel) {
+  return Boolean(hotel.provider_id && savedProviderIds.value.has(hotel.provider_id))
+}
+
+function isHotelPending(hotel) {
+  return Boolean(hotel.provider_id && pendingHotelIds.value.has(hotel.provider_id))
+}
+
+function formatDemoRate(cents) {
+  return money(Number(cents) / 100)
 }
 
 function hotelMarkerIcon(selected = false) {
@@ -448,7 +559,7 @@ function choosePlanningDate(value) {
       </section>
 
       <div class="content-wrap">
-        <section v-if="view !== 'account'" class="search-card" aria-labelledby="search-title">
+        <section v-if="view === 'stays' || view === 'bookings'" class="search-card" aria-labelledby="search-title">
           <div class="search-card-heading">
             <div>
               <p class="eyebrow">Find a hotel</p>
@@ -525,29 +636,66 @@ function choosePlanningDate(value) {
             </tbody>
           </table>
           <div v-if="zipLocation" class="zip-hotels">
-            <h3>Nearby hotels within 5 km</h3>
-            <p v-if="zipState === 'no-results'" class="zip-empty" role="status">ZIP resolved to {{ zipLocation.locality || zipLocation.postcode }}, but no nearby hotels were returned within 5 km.</p>
+            <h3>{{ zipSource === 'local' ? 'Saved locally' : 'API results' }}</h3>
+            <p v-if="zipSource === 'local'" class="zip-empty">These are saved demo records for this ZIP, not a complete list of hotels in the area.</p>
+            <p v-if="zipState === 'no-results'" class="zip-empty" role="status">
+              {{ zipSource === 'local'
+                ? `No saved hotels remain for ZIP ${zipLocation.postcode}. Look up the ZIP again to search API results.`
+                : `ZIP resolved to ${zipLocation.locality || zipLocation.postcode}, but no nearby hotels were returned within 5 km.` }}
+            </p>
             <div v-else class="zip-hotel-explorer">
-              <div class="zip-hotel-list" role="listbox" aria-label="Hotels within 5 km">
-                <button
+              <div class="zip-hotel-list" role="list" aria-label="Hotels within 5 km">
+                <article
                   v-for="hotel in zipLocation.hotels"
                   :key="zipHotelId(hotel)"
-                  type="button"
-                  role="option"
-                  class="zip-hotel-option"
-                  :class="{ selected: selectedZipHotelId === zipHotelId(hotel) }"
-                  :aria-selected="selectedZipHotelId === zipHotelId(hotel)"
-                  @click="selectZipHotel(hotel)"
+                  class="zip-hotel-entry"
+                  role="listitem"
                 >
-                  <strong>{{ hotel.name }}</strong>
-                  <span>{{ hotel.locality || 'Locality unavailable' }}</span>
-                  <small v-if="hotel.address">{{ hotel.address }}</small>
-                  <small>Coordinates: {{ hotel.latitude }}, {{ hotel.longitude }}</small>
-                  <small>Distance from ZIP center: {{ distanceLabel(hotel.distance_meters) }}</small>
-                </button>
+                  <button
+                    type="button"
+                    class="zip-hotel-option"
+                    :class="{ selected: selectedZipHotelId === zipHotelId(hotel) }"
+                    :aria-pressed="selectedZipHotelId === zipHotelId(hotel)"
+                    @click="selectZipHotel(hotel)"
+                  >
+                    <strong>{{ hotel.name || 'Hotel name unavailable' }}</strong>
+                    <span>{{ hotel.locality || (zipSource === 'local' ? zipLocation.locality : '') || 'Locality unavailable' }}</span>
+                    <small v-if="hotel.address">{{ hotel.address }}</small>
+                    <small>Coordinates: {{ hotel.latitude }}, {{ hotel.longitude }}</small>
+                    <small v-if="hotel.distance_meters != null">Distance from ZIP center: {{ distanceLabel(hotel.distance_meters) }}</small>
+                  </button>
+                  <div class="zip-hotel-actions">
+                    <button
+                      v-if="isHotelSaved(hotel)"
+                      class="secondary-button zip-save-button"
+                      type="button"
+                      :disabled="isHotelPending(hotel)"
+                      @click="removeHotelFromLocal(hotel)"
+                    >{{ isHotelPending(hotel) ? 'Removing…' : 'Remove from Local' }}</button>
+                    <button
+                      v-else
+                      class="secondary-button zip-save-button"
+                      type="button"
+                      :disabled="!hotel.provider_id || isHotelPending(hotel)"
+                      :title="hotel.provider_id ? '' : 'This API result has no provider ID to save.'"
+                      @click="addHotelToLocal(hotel)"
+                    >{{ isHotelPending(hotel) ? 'Saving…' : 'Add to Local' }}</button>
+                  </div>
+                  <div v-if="zipSource === 'local' && hotel.nightly_rates?.length" class="demo-night-rates">
+                    <strong>Simulated classroom rates and availability</strong>
+                    <ul>
+                      <li v-for="night in hotel.nightly_rates" :key="night.stay_date">
+                        {{ dateLabel(night.stay_date) }} — {{ formatDemoRate(night.nightly_rate_cents) }} per night · {{ night.rooms_available }} rooms available
+                      </li>
+                    </ul>
+                  </div>
+                </article>
               </div>
               <div ref="zipMapElement" class="zip-map" role="application" :aria-label="`Map of hotels near ZIP ${zipLocation.postcode}`"></div>
             </div>
+            <p v-if="zipActionFeedback.text" :class="['zip-action-feedback', zipActionFeedback.type === 'error' ? 'error' : 'success']" :role="zipActionFeedback.type === 'error' ? 'alert' : 'status'">
+              {{ zipActionFeedback.text }}
+            </p>
             <p v-if="selectedZipHotel" class="zip-map-selection" role="status">
               Selected hotel: {{ selectedZipHotel.name }} — highlighted in the list and on the map.
             </p>
@@ -643,6 +791,7 @@ function choosePlanningDate(value) {
         </section>
       </div>
     </main>
+    <TravelChat />
     <footer class="site-footer">Expedia Rep · classroom prototype · simulated bookings only</footer>
   </div>
 </template>

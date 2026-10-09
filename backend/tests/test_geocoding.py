@@ -2,7 +2,12 @@ import httpx
 import pytest
 
 from app.controllers import geocoding
-from app.controllers.geocoding import GeoapifyProviderError, lookup_postcode, lookup_postcode_with_hotels
+from app.controllers.geocoding import (
+    GeoapifyAuthenticationError,
+    GeoapifyProviderError,
+    lookup_postcode,
+    lookup_postcode_with_hotels,
+)
 
 
 class FakeResponse:
@@ -72,6 +77,21 @@ def test_lookup_postcode_distinguishes_provider_failure(monkeypatch):
     assert "demo-key" not in str(error.value)
 
 
+def test_lookup_postcode_identifies_rejected_api_key_without_echoing_it(monkeypatch):
+    monkeypatch.setattr(geocoding, "get_geoapify_api_key", lambda: "secret-demo-key")
+    request = httpx.Request("GET", geocoding.GEOCODING_URL)
+    response = httpx.Response(401, request=request, json={"error": "Unauthorized"})
+
+    def rejected_get(*args, **kwargs):
+        raise httpx.HTTPStatusError("Unauthorized", request=request, response=response)
+
+    monkeypatch.setattr(geocoding.httpx, "get", rejected_get)
+
+    with pytest.raises(GeoapifyAuthenticationError, match="^Geoapify rejected the configured API key\.$") as error:
+        lookup_postcode("19014")
+    assert "secret-demo-key" not in str(error.value)
+
+
 def test_lookup_postcode_with_hotels_uses_verified_point_and_radius(monkeypatch):
     calls = []
     monkeypatch.setattr(geocoding, "get_geoapify_api_key", lambda: "demo-key")
@@ -81,7 +101,7 @@ def test_lookup_postcode_with_hotels_uses_verified_point_and_radius(monkeypatch)
         if url == geocoding.GEOCODING_URL:
             return FakeResponse({"results": [{"postcode": "01234", "country_code": "us", "lat": 40.0, "lon": -77.0}]})
         return FakeResponse({"features": [
-            {"properties": {"name": "Near Hotel", "city": "Neartown"}, "geometry": {"coordinates": [-77.001, 40.001]}},
+            {"properties": {"place_id": "provider:Exact-ID", "name": "Near Hotel", "city": "Neartown"}, "geometry": {"coordinates": [-77.001, 40.001]}},
             {"properties": {"name": "Far Hotel"}, "geometry": {"coordinates": [-77.1, 40.1]}},
         ]})
 
@@ -90,6 +110,7 @@ def test_lookup_postcode_with_hotels_uses_verified_point_and_radius(monkeypatch)
 
     assert result["postcode"] == "01234"
     assert [hotel["name"] for hotel in result["hotels"]] == ["Near Hotel"]
+    assert result["hotels"][0]["provider_id"] == "provider:Exact-ID"
     assert calls[1][0] == geocoding.PLACES_URL
     assert calls[1][1]["filter"] == "circle:-77.0,40.0,5000"
 

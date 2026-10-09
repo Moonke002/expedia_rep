@@ -8,7 +8,7 @@
 
 * { box-sizing: border-box; }
 body { min-width: 320px; margin: 0; }
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: wait; opacity: .62; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #7eb5ff; outline-offset: 2px; }
@@ -73,12 +73,21 @@ h1, h2, h3, p { margin-top: 0; }
 .zip-hotels h3 { margin: 0 0 .45rem; color: #1b5f91; font-size: .88rem; }
 .zip-hotel-explorer { display: grid; grid-template-columns: minmax(15rem, .85fr) minmax(0, 1.4fr); gap: .8rem; align-items: stretch; }
 .zip-hotel-list { display: grid; align-content: start; gap: .4rem; max-height: 420px; overflow-y: auto; padding-right: .25rem; }
+.zip-hotel-entry { display: grid; gap: .35rem; border: 1px solid #dce4ef; border-radius: 9px; padding: .45rem; background: white; }
 .zip-hotel-option { display: grid; gap: .18rem; border: 1px solid #dce4ef; border-radius: 9px; padding: .65rem .75rem; background: white; color: #17233e; text-align: left; cursor: pointer; }
 .zip-hotel-option:hover { border-color: #80a9cd; background: #f4f9fd; }
 .zip-hotel-option.selected { border-color: #1769a8; background: #eaf4fb; box-shadow: inset 3px 0 #1769a8; }
 .zip-hotel-option strong { font-size: .83rem; }
 .zip-hotel-option span { color: #405772; font-size: .75rem; }
 .zip-hotel-option small { color: #64718a; font-size: .69rem; line-height: 1.35; }
+.zip-hotel-actions { display: flex; justify-content: flex-start; }
+.zip-save-button { min-height: 34px; padding: .42rem .65rem; font-size: .72rem; }
+.demo-night-rates { border-radius: 7px; padding: .55rem .65rem; background: #f5f8fc; color: #405772; font-size: .7rem; }
+.demo-night-rates strong { color: #774d11; }
+.demo-night-rates ul { display: grid; gap: .2rem; margin: .35rem 0 0; padding-left: 1.1rem; }
+.zip-action-feedback { grid-column: 1 / -1; margin: .3rem 0 0; font-size: .78rem; font-weight: 750; }
+.zip-action-feedback.success { color: #176b46; }
+.zip-action-feedback.error { color: #a12c37; }
 .zip-map { z-index: 0; min-height: 420px; overflow: hidden; border: 1px solid #cfdbe8; border-radius: 10px; background: #e9f0f4; }
 .zip-map .leaflet-container { width: 100%; height: 100%; min-height: 420px; font: inherit; }
 .zip-map-marker-shell { border: 0; background: transparent; }
@@ -109,6 +118,53 @@ h1, h2, h3, p { margin-top: 0; }
 .account-form { display: grid; gap: .9rem; margin: 1.2rem 0 .6rem; }
 .account-form label { display: grid; gap: .35rem; color: #42556f; font-size: .8rem; font-weight: 800; }
 .account-form input { width: 100%; min-height: 44px; border: 1px solid #aebed1; border-radius: 9px; padding: .55rem .7rem; color: #17233e; }
+.assistant-card { width: min(820px, 100%); margin: 1.5rem auto 0; border: 1px solid #dce4ef; border-radius: 18px; padding: clamp(1.1rem, 4vw, 2rem); background: white; box-shadow: 0 14px 40px #172b5020; }
+.assistant-card h2 { margin-bottom: .5rem; font-size: clamp(1.5rem, 3vw, 2rem); letter-spacing: -.035em; }
+.assistant-intro, .assistant-disclaimer { color: #5d6c80; font-size: .84rem; line-height: 1.55; }
+.travel-chat-widget { position: fixed; z-index: 1000; right: 1.25rem; bottom: 1.25rem; }
+.chat-launcher { display: flex; align-items: center; gap: .55rem; min-height: 54px; border: 1px solid #ffd53b; border-radius: 999px; padding: .65rem 1rem .65rem .8rem; background: #103d6b; color: white; box-shadow: 0 8px 24px #09274850; font-size: .83rem; font-weight: 850; }
+.chat-launcher:hover { background: #174f86; }
+.chat-launcher-icon { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 50%; background: #ffd53b; color: #103d6b; font-size: 1.1rem; }
+.chat-popover { position: fixed; right: 1.25rem; bottom: 5.7rem; display: flex; width: min(420px, calc(100vw - 2.5rem)); max-height: min(760px, calc(100vh - 7rem)); max-height: min(760px, calc(100dvh - 7rem)); flex-direction: column; overflow: hidden; border: 1px solid #cfdbe8; border-radius: 18px; padding: 1rem; background: white; box-shadow: 0 18px 55px #09274840; }
+.chat-popover-header { display: flex; align-items: flex-start; justify-content: space-between; gap: .8rem; }
+.chat-popover-header .eyebrow { margin-bottom: .2rem; }
+.chat-popover h2 { margin: 0; color: #17233e; font-size: 1.3rem; letter-spacing: -.035em; }
+.chat-close { flex: none; width: 34px; height: 34px; border: 1px solid #dce4ef; border-radius: 50%; background: white; color: #31516f; font-size: 1.35rem; line-height: 1; }
+.chat-close:hover { background: #edf4fa; }
+.chat-popover .assistant-intro { margin: .45rem 0 .35rem; font-size: .76rem; }
+.chat-popover .chat-conversation-id { margin: 0 0 .6rem; }
+.chat-conversation { display: grid; gap: .8rem; max-height: 52vh; min-height: 180px; overflow-y: auto; border: 1px solid #e0e8f0; border-radius: 12px; padding: 1rem; background: #f8fbfe; }
+.chat-popover .chat-conversation { flex: 1 1 auto; min-height: 120px; max-height: none; overscroll-behavior: contain; }
+.chat-empty, .chat-pending { margin: 0; color: #687b90; font-size: .83rem; }
+.chat-message { width: min(90%, 680px); border: 1px solid #dce7f1; border-radius: 12px; padding: .85rem 1rem; background: white; }
+.chat-popover .chat-message { width: min(96%, 360px); padding: .65rem .75rem; font-size: .8rem; }
+.chat-message-user { justify-self: end; border-color: #b8d5eb; background: #edf6fc; }
+.chat-message-error { border-color: #e6b7b7; background: #fff7f7; }
+.chat-message h3 { margin-bottom: .35rem; color: #174f86; font-size: .75rem; }
+.chat-message-error h3 { color: #a33242; }
+.chat-message time, .chat-conversation-id { display: block; margin-bottom: .35rem; color: #697b90; font-size: .68rem; }
+.chat-conversation-id code { overflow-wrap: anywhere; }
+.chat-message p { margin-bottom: .25rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-evidence { margin-top: .75rem; border-top: 1px solid #dce7f1; padding-top: .65rem; color: #536780; font-size: .76rem; }
+.chat-evidence summary { cursor: pointer; color: #155b93; font-weight: 800; }
+.chat-evidence h4 { margin: .8rem 0 .35rem; color: #174f86; font-size: .74rem; }
+.chat-evidence pre { max-height: 260px; overflow: auto; border-radius: 8px; padding: .7rem; background: #edf2f7; color: #263a54; font: .68rem/1.5 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-empty-records { color: #697b90; font-size: .72rem; }
+.assistant-form { display: grid; gap: .55rem; margin: 1.2rem 0; }
+.chat-popover .assistant-form { flex: none; gap: .4rem; margin: .7rem 0 .45rem; }
+.assistant-form label { color: #42556f; font-size: .78rem; font-weight: 850; }
+.assistant-form textarea { width: 100%; min-height: 105px; resize: vertical; border: 1px solid #aebed1; border-radius: 10px; padding: .75rem; color: #17233e; line-height: 1.5; }
+.chat-popover .assistant-form textarea { min-height: 70px; max-height: 115px; resize: vertical; font-size: .82rem; }
+.assistant-form textarea:focus { border-color: #1b70b3; box-shadow: 0 0 0 3px #71abde42; outline: 0; }
+.assistant-form textarea:disabled { background: #f1f4f8; }
+.assistant-form-footer { display: flex; align-items: center; justify-content: space-between; gap: .75rem; color: #697b90; font-size: .72rem; }
+.assistant-answer { margin-top: 1rem; border: 1px solid #dce7f1; border-radius: 12px; padding: 1rem 1.1rem; background: #f8fbfe; }
+.assistant-answer h3 { margin-bottom: .45rem; color: #174f86; font-size: 1rem; }
+.assistant-answer > p { margin-bottom: .8rem; line-height: 1.65; white-space: pre-wrap; }
+.assistant-sources { border-top: 1px solid #dce7f1; padding-top: .7rem; color: #536780; font-size: .76rem; }
+.assistant-sources ul { display: grid; gap: .3rem; margin: .45rem 0 0; padding-left: 1.1rem; }
+.assistant-disclaimer { margin: .9rem 0 0; font-size: .72rem; }
+.chat-popover .assistant-disclaimer { flex: none; margin: .15rem 0 0; font-size: .66rem; }
 .account-form .notice { margin: 0; }
 .account-card .demo-hint { margin: 1rem 0 0; border-top: 1px solid #e5ecf4; padding-top: .8rem; font-size: .77rem; }
 .section-head { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin: 2.2rem 0 1.1rem; }
@@ -194,6 +250,9 @@ h1, h2, h3, p { margin-top: 0; }
   .zip-hotel-list { max-height: 320px; }
   .calendar { right: 0; }
   .calendar-months { grid-template-columns: 1fr; }
+  .travel-chat-widget { right: .75rem; bottom: .75rem; }
+  .chat-popover { right: .75rem; bottom: 5rem; width: calc(100vw - 1.5rem); max-height: calc(100vh - 5.75rem); max-height: calc(100dvh - 5.75rem); padding: .85rem; }
+  .chat-launcher { min-height: 50px; padding: .55rem .8rem .55rem .6rem; font-size: .76rem; }
   .calendar-month:nth-child(2) { display: none; }
   .stay-card { grid-template-columns: 1fr; }
   .stay-illustration { min-height: 125px; }

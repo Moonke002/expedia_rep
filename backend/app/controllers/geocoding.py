@@ -32,6 +32,7 @@ class LocationResponse(TypedDict, total=False):
 
 
 class NearbyHotel(TypedDict, total=False):
+    provider_id: str
     name: str
     address: str
     locality: str
@@ -46,6 +47,10 @@ class GeoapifyProviderError(RuntimeError):
 
 class GeoapifyConfigurationError(GeoapifyProviderError):
     """Raised when the Geoapify key is not configured."""
+
+
+class GeoapifyAuthenticationError(GeoapifyProviderError):
+    """Raised when Geoapify rejects the configured key."""
 
 
 def _coordinate(value: object, minimum: float, maximum: float) -> float | None:
@@ -96,6 +101,10 @@ def lookup_postcode(postcode: str = "16802") -> LocationResponse | None:
         response = httpx.get(GEOCODING_URL, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
         response.raise_for_status()
         payload = response.json()
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code == 401:
+            raise GeoapifyAuthenticationError("Geoapify rejected the configured API key.") from error
+        raise GeoapifyProviderError("Geoapify lookup failed.") from error
     except (httpx.HTTPError, TypeError, ValueError) as error:
         raise GeoapifyProviderError("Geoapify lookup failed.") from error
 
@@ -158,6 +167,10 @@ def lookup_nearby_hotels(location: LocationResponse) -> list[NearbyHotel]:
         response = httpx.get(PLACES_URL, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
         response.raise_for_status()
         payload = response.json()
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code == 401:
+            raise GeoapifyAuthenticationError("Geoapify rejected the configured API key.") from error
+        raise GeoapifyProviderError("Geoapify hotel lookup failed.") from error
     except (httpx.HTTPError, TypeError, ValueError) as error:
         raise GeoapifyProviderError("Geoapify hotel lookup failed.") from error
 
@@ -190,6 +203,10 @@ def lookup_nearby_hotels(location: LocationResponse) -> list[NearbyHotel]:
             "latitude": hotel_latitude,
             "longitude": hotel_longitude,
         }
+        provider_id = properties.get("place_id")
+        if isinstance(provider_id, str) and provider_id.strip():
+            # Keep the provider identifier verbatim; it is the local primary key.
+            hotel["provider_id"] = provider_id
         address = properties.get("address_line1") or properties.get("formatted")
         if isinstance(address, str) and address.strip():
             hotel["address"] = address.strip()

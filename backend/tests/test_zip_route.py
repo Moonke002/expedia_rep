@@ -2,7 +2,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main
-from app.controllers.geocoding import GeoapifyConfigurationError, GeoapifyProviderError
+from app.controllers.geocoding import (
+    GeoapifyAuthenticationError,
+    GeoapifyConfigurationError,
+    GeoapifyProviderError,
+)
 
 
 def test_zip_location_route_returns_controller_location(monkeypatch):
@@ -27,6 +31,11 @@ def test_zip_location_route_returns_controller_location(monkeypatch):
     ("error", "status_code", "detail"),
     [
         (GeoapifyConfigurationError("ignored"), 503, "ZIP lookup is not configured."),
+        (
+            GeoapifyAuthenticationError("ignored"),
+            503,
+            "Geoapify rejected its API key. Update GEOAPIFY_API_KEY in the project-root .env file, then restart FastAPI.",
+        ),
         (GeoapifyProviderError("ignored"), 502, "ZIP lookup provider failed."),
     ],
 )
